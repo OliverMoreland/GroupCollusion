@@ -284,7 +284,7 @@ groups = [root] + sorted({p.parent.parent for p in root.glob("**/events.jsonl")}
 group = st.sidebar.selectbox("group", groups, format_func=lambda p: str(p.relative_to(root)) if p != root else "(all)")
 runs = sorted((p.parent for p in group.glob("**/events.jsonl")), key=lambda p: p.stat().st_mtime, reverse=True)
 run = st.sidebar.selectbox("run", [None] + runs, format_func=lambda p: "(overview)" if p is None else p.name)
-page = st.sidebar.radio("page", ["dashboard", "transcripts"], horizontal=True, disabled=run is None)
+page = st.sidebar.radio("page", ["dashboard", "transcripts"], horizontal=True)
 refresh = st.sidebar.number_input("auto-refresh (s, 0 = off)", 0, 600, 5)
 
 with st.sidebar.expander("start a run"):
@@ -306,10 +306,12 @@ with st.sidebar.expander("start a run"):
 
 @st.fragment(run_every=refresh or None)
 def live():
-    if run is None:
+    if page == "transcripts" and runs:
+        if run is None:
+            st.caption(f"newest run: {runs[0].name} (pick another in the sidebar)")
+        transcript_view(run or runs[0])
+    elif run is None:
         overview(group)
-    elif page == "transcripts":
-        transcript_view(run)
     else:
         run_view(run)
 
