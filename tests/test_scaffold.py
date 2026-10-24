@@ -122,3 +122,56 @@ def test_load_dotenv_keeps_real_env(tmp_path, monkeypatch):
     import os
     assert os.environ["GC_TEST_A"] == "a1" and os.environ["GC_TEST_B"] == "from-shell"
     monkeypatch.delenv("GC_TEST_A")
+
+
+def test_console_editor_estimates_match_smoke_run():
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "console"))
+    from editor import _load, calls_per_round, problems
+    c, _, _ = _load(Path(__file__).resolve().parents[1] / "configs" / "smoke.yaml")
+    assert calls_per_round(c)[:2] == (12, 12)  # 4 messages + 4 proposals + 4 ballots: the live smoke run made 36 calls in 3 rounds
+    assert problems(c) == ([], [])
+    c["team"]["structure"], c["communication"]["channels"] = "single", ["sub_dm"]
+    assert problems(c)[0]
+
+
+@pytest.mark.parametrize("structure", ["elected_leader", "representatives"])
+def test_conversation_memory_is_append_only(tmp_path, structure):
+    cfg = load_config(None, [f"team.structure={structure}", "team.size=3", "team.reelect_every=2", "rounds=4",
+                             "communication.subrounds=2", "llm.provider=mock",
+                             "communication.channels=[team_open, sub_dm]"])
+    Simulation(cfg, run_dir=tmp_path / "run").run()
+    calls = [e for e in read_events(tmp_path / "run") if e["type"] == "llm_call"]
+    by_agent = {}
+    for c in calls:
+        by_agent.setdefault(c["agent"], []).append(c)
+    for agent, cs in by_agent.items():
+        for prev, cur in zip(cs, cs[1:]):
+            n = len(prev["messages"])
+            if prev["call_id"] == cur["call_id"]:  # repair attempt
+                continue
+            # every call starts with the previous call's prompt and answer, so the prefix stays cacheable
+            assert cur["messages"][:n] == prev["messages"]
+            assert cur["messages"][n] == {"role": "assistant", "content": prev["response"]}
+        text = "".join(m["content"] for m in cs[-1]["messages"])
+        assert "mock reasoning" not in text and "PLANS.txt" not in text
+    first = by_agent["A1"][0]["messages"][1]["content"]
+    assert "This is round 1." in first and "none yet" in first
+
+
+def test_conversation_trims_long_chats(tmp_path):
+    cfg = load_config(None, ["rounds=30", "llm.provider=mock", "agent.context_chars=6000"])
+    sim = Simulation(cfg, run_dir=tmp_path / "run")
+    sim.run()
+    a = sim.agents["A1"]
+    assert len(a.system) + sum(len(m["content"]) for t in a.turns for m in t["messages"]) <= 6000
+    assert a.turns[0]["round"] > 1 and "were removed to save space" in a.turns[0]["messages"][0]["content"]
+
+
+def test_notes_memory_still_stateless(tmp_path):
+    cfg = load_config(None, ["rounds=3", "llm.provider=mock", "agent.memory=notes"])
+    Simulation(cfg, run_dir=tmp_path / "run").run()
+    calls = [e for e in read_events(tmp_path / "run") if e["type"] == "llm_call"]
+    assert all(len(c["messages"]) == 2 for c in calls if c["attempt"] == 0)
+    assert "PLANS.txt" in calls[-1]["messages"][1]["content"]

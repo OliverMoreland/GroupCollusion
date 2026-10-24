@@ -35,6 +35,8 @@ agent:
   temperature: 1.0
   max_tokens: 8000
   prompt_prefix: P1    # P1 | P2
+  memory: conversation # conversation (one chat per agent) | notes (Fish et al.: stateless calls + PLANS/INSIGHTS)
+  context_chars: 400000
   history_window: 100
   show_competitor_prices: true
   max_price: 10.0
@@ -46,8 +48,11 @@ judge:
   max_tokens: 8000
 
 llm:
-  provider: openrouter # openrouter | mock
-  api_key_env: OPENROUTER_KEY
+  provider: vllm       # vllm (our Modal server, MODAL_LLM_URL/MODAL_LLM_KEY in .env) | openrouter | mock
+  api_key_env: OPENROUTER_KEY  # openrouter only
   concurrency: 16
-  timeout: 180
+  timeout: 90          # vllm uses at least 900 s (cold starts)
+  provider_routing:    # openrouter only; null = let OpenRouter pick hosts per call (slower, mixed)
+    only: [baidu, gmicloud]
+    allow_fallbacks: false
   max_retries: 5

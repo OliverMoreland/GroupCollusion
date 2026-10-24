@@ -24,6 +24,7 @@ class LLMResponse:
     raw_id: str | None = None
     error: str | None = None
     finish_reason: str | None = None
+    provider: str | None = None
 
 
 def load_dotenv(*paths):
@@ -42,12 +43,22 @@ def load_dotenv(*paths):
 
 
 class OpenRouterClient:
+    """OpenAI-compatible chat client for OpenRouter, or for our vLLM server on Modal (provider=vllm)."""
+
     def __init__(self, cfg):
         load_dotenv()
-        key = os.environ.get(cfg.api_key_env) or os.environ.get("OPENROUTER_API_KEY")
+        self.vllm = cfg.provider == "vllm"
+        if self.vllm:
+            self.base_url = os.environ.get(cfg.vllm_url_env, "").rstrip("/")
+            key = os.environ.get(cfg.vllm_key_env)
+            if not self.base_url:
+                raise RuntimeError(f"No vLLM endpoint in ${cfg.vllm_url_env}; deploy modal_app/deepseek.py and put its URL in .env")
+        else:
+            self.base_url = cfg.base_url
+            key = os.environ.get(cfg.api_key_env) or os.environ.get("OPENROUTER_API_KEY")
         key = "".join((key or "").split())  # pasted keys sometimes carry stray spaces/newlines
         if not key:
-            raise RuntimeError(f"No API key in ${cfg.api_key_env} or $OPENROUTER_API_KEY")
+            raise RuntimeError(f"No API key in ${cfg.vllm_key_env if self.vllm else cfg.api_key_env}")
         self.cfg = cfg
         self.session = requests.Session()
         self.session.headers.update({
@@ -55,6 +66,27 @@ class OpenRouterClient:
             "Content-Type": "application/json",
             "X-Title": "GroupCollusion",
         })
+        # our own server has no stuck hosts, but long reasoning traces legitimately take minutes
+        self.timeout = max(cfg.timeout, 900) if self.vllm else cfg.timeout
+        if self.vllm:
+            self.wait_until_ready()
+
+    def wait_until_ready(self, max_wait=45 * 60):
+        """Block until the Modal server answers; the first request after an idle spell triggers a cold start."""
+        t0 = time.time()
+        while True:
+            try:
+                r = self.session.get(f"{self.base_url}/models", timeout=60)
+                if r.status_code == 200:
+                    return
+                if r.status_code in (401, 403):
+                    raise RuntimeError(f"vLLM endpoint rejected the key (HTTP {r.status_code}); check ${self.cfg.vllm_key_env}")
+            except requests.RequestException:
+                pass
+            if time.time() - t0 > max_wait:
+                raise RuntimeError(f"vLLM endpoint {self.base_url} not ready after {max_wait // 60} min")
+            print(f"waiting for the model server to start ({int(time.time() - t0)} s)...", flush=True)
+            time.sleep(15)
 
     def complete(self, messages, *, model, temperature=1.0, max_tokens=4000,
                  reasoning=True, reasoning_effort=None, hints=None) -> LLMResponse:
@@ -63,16 +95,22 @@ class OpenRouterClient:
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
-            "usage": {"include": True},  # returns cost in usage
         }
-        if reasoning:
-            body["reasoning"] = {"effort": reasoning_effort} if reasoning_effort else {"enabled": True}
+        if self.vllm:
+            # DeepSeek V4's chat template thinks only when asked; "high" is its standard thinking mode
+            body["chat_template_kwargs"] = {"thinking": bool(reasoning), "reasoning_effort": reasoning_effort or "high"}
+        else:
+            body["usage"] = {"include": True}  # returns cost in usage
+            if reasoning:
+                body["reasoning"] = {"effort": reasoning_effort} if reasoning_effort else {"enabled": True}
+            if self.cfg.provider_routing:
+                body["provider"] = self.cfg.provider_routing
         last_err = None
         for attempt in range(self.cfg.max_retries + 1):
             t0 = time.time()
             try:
-                r = self.session.post(f"{self.cfg.base_url}/chat/completions", json=body,
-                                      timeout=self.cfg.timeout)
+                r = self.session.post(f"{self.base_url}/chat/completions", json=body,
+                                      timeout=self.timeout)
                 if r.status_code in (408, 429) or r.status_code >= 500:
                     raise RuntimeError(f"HTTP {r.status_code}: {r.text[:300]}")
                 if r.status_code != 200:  # client errors are not retried
@@ -85,7 +123,8 @@ class OpenRouterClient:
                 msg = choice["message"]
                 finish = choice.get("finish_reason")
                 content = msg.get("content") or ""
-                reasoning_text = msg.get("reasoning") or _join_reasoning(msg.get("reasoning_details"))
+                reasoning_text = (msg.get("reasoning") or msg.get("reasoning_content")
+                                  or _join_reasoning(msg.get("reasoning_details")))
                 if finish == "length":
                     # reasoning ate the budget, so the answer is missing or truncated: retry with more room
                     body["max_tokens"] = min(2 * body["max_tokens"], MAX_TOKENS_CAP)
@@ -95,7 +134,7 @@ class OpenRouterClient:
                     raise RuntimeError(f"empty content (finish_reason={finish})")
                 return LLMResponse(content=content, reasoning=reasoning_text, model=data.get("model"),
                                    usage=data.get("usage") or {}, latency_s=time.time() - t0,
-                                   raw_id=data.get("id"), finish_reason=finish)
+                                   raw_id=data.get("id"), finish_reason=finish, provider=data.get("provider") or ("modal-vllm" if self.vllm else None))
             except (requests.RequestException, RuntimeError, ValueError, KeyError) as e:
                 last_err = f"{type(e).__name__}: {e}"
                 time.sleep(min(60, 2 ** attempt + random.random()))
@@ -131,7 +170,7 @@ class MockClient:
                     for c in chans if rng.random() < 0.6]
             out = {"messages": msgs, "done": rng.random() < 0.3}
         elif phase in ("propose", "leader"):
-            out = {"plans": "mock plan", "insights": "mock insight",
+            out = {"plans": "mock plan", "insights": "mock insight", "note": "mock note",
                    "price": round(rng.uniform(lo, hi), 2), "rationale": "mock rationale"}
         elif phase == "ballot":
             out = {"vote": rng.choice(h["candidates"]), "reason": "mock"}
@@ -153,7 +192,7 @@ class MockClient:
 def make_client(llm_cfg, seed: int = 0):
     if llm_cfg.provider == "mock":
         return MockClient(seed)
-    if llm_cfg.provider == "openrouter":
+    if llm_cfg.provider in ("openrouter", "vllm"):
         return OpenRouterClient(llm_cfg)
     raise ValueError(f"unknown llm.provider {llm_cfg.provider!r}")
 

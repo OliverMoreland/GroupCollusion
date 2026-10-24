@@ -11,6 +11,8 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from editor import editor_page
+
 REPO = Path(__file__).resolve().parents[1]
 STRUCTURE_ORDER = ["vote", "average", "leader", "elected_leader", "representatives", "single"]
 COMMS_ORDER = ["none", "sub_dm", "cross_dm", "all_dm", "global_open"]
@@ -136,6 +138,18 @@ def run_view(run_dir):
             fig.add_hline(y=y, line_dash="dash", annotation_text=name)
         c1.plotly_chart(fig, width="stretch")
         fig = px.line(pd.DataFrame(markets), x="round", y="collusion_index", markers=True)
+        for name, y in (("Nash", 0), ("monopoly", 1)):
+            fig.add_hline(y=y, line_dash="dash", annotation_text=name)
+        c2.plotly_chart(fig, width="stretch")
+        fig = px.line(prices, x="round", y="profit", color="firm", markers=True)
+        for name, y in (("Nash", b["nash_profit"]), ("monopoly", b["monopoly_profit"])):
+            fig.add_hline(y=y, line_dash="dash", annotation_text=name)
+        c1.plotly_chart(fig, width="stretch")
+        span = b["monopoly_profit"] - b["nash_profit"]
+        profit_index = pd.DataFrame([{"round": m["round"], "profit collusion index":
+                                      (np.mean([v["profit"] for v in m["firms"].values()]) - b["nash_profit"]) / span}
+                                     for m in markets])
+        fig = px.line(profit_index, x="round", y="profit collusion index", markers=True)
         for name, y in (("Nash", 0), ("monopoly", 1)):
             fig.add_hline(y=y, line_dash="dash", annotation_text=name)
         c2.plotly_chart(fig, width="stretch")
@@ -279,12 +293,23 @@ def transcript_view(run_dir):
             st.error(f"{kind}: {json.dumps({k: v for k, v in e.items() if k not in ('t', 'type')})}")
 
 
+def launch(config, sweep, overrides, mock, parallel):
+    """Start `python -m collusion run|sweep` in the background; returns the log path relative to the repo."""
+    cmd = [sys.executable, "-m", "collusion", "sweep" if sweep else "run", config]
+    cmd += [a for o in overrides if o.strip() for a in ("--set", o.strip())]
+    cmd += ["--mock"] * mock + (["--parallel", str(parallel)] if sweep else [])
+    log = REPO / "runs" / f"launch-{time.strftime('%Y%m%d-%H%M%S')}.log"
+    log.parent.mkdir(exist_ok=True)
+    subprocess.Popen(cmd, cwd=REPO, stdout=open(log, "w"), stderr=subprocess.STDOUT, start_new_session=True)
+    return log.relative_to(REPO)
+
+
 root = Path(st.sidebar.text_input("runs directory", str(REPO / "runs")))
 groups = [root] + sorted({p.parent.parent for p in root.glob("**/events.jsonl")} - {root}, key=lambda p: p.stat().st_mtime, reverse=True)
 group = st.sidebar.selectbox("group", groups, format_func=lambda p: str(p.relative_to(root)) if p != root else "(all)")
 runs = sorted((p.parent for p in group.glob("**/events.jsonl")), key=lambda p: p.stat().st_mtime, reverse=True)
 run = st.sidebar.selectbox("run", [None] + runs, format_func=lambda p: "(overview)" if p is None else p.name)
-page = st.sidebar.radio("page", ["dashboard", "transcripts"], horizontal=True, disabled=run is None)
+page = st.sidebar.radio("page", ["dashboard", "transcripts", "new config"], horizontal=True)
 refresh = st.sidebar.number_input("auto-refresh (s, 0 = off)", 0, 600, 5)
 
 with st.sidebar.expander("start a run"):
@@ -295,23 +320,23 @@ with st.sidebar.expander("start a run"):
     mock = st.checkbox("mock LLM (offline, free)")
     parallel = st.number_input("parallel runs (sweep)", 1, 64, 4) if sweep else 1
     if st.button("start"):
-        cmd = [sys.executable, "-m", "collusion", "sweep" if sweep else "run", config]
-        cmd += [a for o in overrides.splitlines() if o.strip() for a in ("--set", o.strip())]
-        cmd += ["--mock"] * mock + (["--parallel", str(parallel)] if sweep else [])
-        log = REPO / "runs" / f"launch-{time.strftime('%Y%m%d-%H%M%S')}.log"
-        log.parent.mkdir(exist_ok=True)
-        subprocess.Popen(cmd, cwd=REPO, stdout=open(log, "w"), stderr=subprocess.STDOUT, start_new_session=True)
-        st.success(f"started; output in {log.relative_to(REPO)}. It appears under group/run once round 1 logs.")
+        log = launch(config, sweep, overrides.splitlines(), mock, parallel)
+        st.success(f"started; output in {log}. It appears under group/run once round 1 logs.")
 
 
 @st.fragment(run_every=refresh or None)
 def live():
-    if run is None:
+    if page == "transcripts" and runs:
+        if run is None:
+            st.caption(f"newest run: {runs[0].name} (pick another in the sidebar)")
+        transcript_view(run or runs[0])
+    elif run is None:
         overview(group)
-    elif page == "transcripts":
-        transcript_view(run)
     else:
         run_view(run)
 
 
-live()
+if page == "new config":
+    editor_page(launch)  # outside the auto-refreshing fragment so edits aren't interrupted
+else:
+    live()

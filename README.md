@@ -11,7 +11,10 @@ chain-of-thought can be logged and inspected.
 
 ```bash
 pip install -r requirements.txt
-export OPENROUTER_KEY=...                      # or OPENROUTER_API_KEY, or put it in .env
+# the model runs on our own vLLM server on Modal (see "Model server" below); put its URL and key in .env:
+#   MODAL_LLM_URL=https://<workspace>--groupcollusion-deepseek-serve.modal.run/v1
+#   MODAL_LLM_KEY=...
+# or use OpenRouter instead with --set llm.provider=openrouter and OPENROUTER_KEY=... in .env
 
 python -m collusion benchmarks                 # Nash / monopoly prices for the market
 python -m collusion run configs/smoke.yaml --echo          # 3-round live check (cheap)
@@ -20,13 +23,30 @@ python -m collusion run configs/teams.yaml --judge         # teams of 3, voting,
 python -m collusion sweep configs/sweep.yaml --dry-run     # list the full grid
 python -m collusion sweep configs/sweep.yaml --judge       # run it
 python -m collusion sweep configs/grid.yaml --parallel 15  # the project grid (structure x cross-firm comms)
-streamlit run console/app.py                               # live console over runs/ (sidebar: start a run, per-agent transcripts)
+streamlit run console/app.py                               # live console over runs/ (sidebar: start a run, transcripts, new-config editor)
 python -m collusion report runs/sweep                      # one row per run -> report.csv
 python -m pytest                                           # offline tests (mock LLM)
 ```
 
 Every command accepts `--mock` to use an offline mock LLM, and `run`/`sweep` accept dotted
 overrides, e.g. `--set team.structure=leader --set 'communication.channels=[team_open,cross_dm]'`.
+
+## Model server
+
+`modal_app/deepseek.py` serves `deepseek-ai/DeepSeek-V4-Flash` (pinned revision) with vLLM on 4×B200 on Modal,
+behind an OpenAI-compatible API with a key, under the same model name the configs use. `llm.provider: vllm` (the
+default) sends every call there; the client waits for a cold start before the first call. The server scales to
+zero 10 minutes after the last call and costs about $25/h while up.
+
+```bash
+pip install modal && modal setup
+modal secret create groupcollusion-llm-key LLM_API_KEY=<random>    # same value as MODAL_LLM_KEY in .env
+modal run modal_app/deepseek.py::download                          # once: ~160 GB of weights into a Volume
+modal deploy modal_app/deepseek.py                                 # prints the URL for MODAL_LLM_URL (add /v1)
+```
+
+Thinking is always on (the template's "high" mode, as on OpenRouter), and reasoning comes back in the logs as before.
+Cost per call isn't reported for this backend, so the console's cost column reads $0.
 
 ## The game
 
@@ -37,9 +57,22 @@ duopoly at α=1 the Nash price is 1.473 and the monopoly price is 1.925. The hea
 is the collusion index **Δ = (p̄ − p_Nash)/(p_Monopoly − p_Nash)** (0 = competitive, 1 = full
 collusion), plus the same index on profits.
 
-Each agent gets the Fish et al. task prompt (P1 or P2 prefix), the last `history_window`
-rounds of market data, and its own PLANS.txt / INSIGHTS.txt notes which it rewrites every
-round. The prompt text is adapted from the paper and should be checked against its appendix
+Each agent gets the Fish et al. task prompt (P1 or P2 prefix). How it remembers past rounds
+depends on `agent.memory`:
+
+- `conversation` (default): each agent keeps one chat for the whole run. Every call appends a user
+  turn with only what is new since the agent last spoke (the round number, new market results, new
+  messages from others, election results and closed channels) plus the task, and the agent's answer
+  is appended after it. The system prompt never changes, so each call's prompt is the previous one
+  plus a few lines, which providers can serve from their prompt cache. Proposals ask only for a
+  price and an optional short `note` to self. Reasoning traces are logged but never sent back. Past
+  `context_chars` characters, the oldest turns are dropped (down to half) and replaced by a market
+  data recap.
+- `notes`: the original Fish et al. setup. Every call is a fresh system + user pair with the last
+  `history_window` rounds of market data and the agent's PLANS.txt / INSIGHTS.txt notes, which it
+  rewrites every round.
+
+The prompt text is adapted from the paper and should be checked against its appendix
 before treating results as a strict replication (`collusion/prompts.py`).
 
 ## Team structures (`team.structure`)
@@ -60,7 +93,7 @@ All members share the firm's profit.
 A composable list of channel types. Before pricing, every agent with at least one channel
 gets up to `subrounds` simultaneous messaging turns and may post at most one message per channel
 per turn. An agent can answer `"done": true` to stop early; it is only asked again that round if a
-new message reaches it. Agents see the last `history_rounds` rounds of messages on their channels.
+new message reaches it. In `conversation` memory agents see every message from others on their channels once, as it arrives; in `notes` memory they see the last `history_rounds` rounds of messages each turn.
 
 | type | channels created |
 |---|---|
