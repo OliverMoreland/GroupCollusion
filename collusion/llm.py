@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 
 import requests
 
+MAX_TOKENS_CAP = 32000
+
 
 @dataclass
 class LLMResponse:
@@ -20,11 +22,13 @@ class LLMResponse:
     latency_s: float = 0.0
     raw_id: str | None = None
     error: str | None = None
+    finish_reason: str | None = None
 
 
 class OpenRouterClient:
     def __init__(self, cfg):
         key = os.environ.get(cfg.api_key_env) or os.environ.get("OPENROUTER_API_KEY")
+        key = "".join((key or "").split())  # pasted keys sometimes carry stray spaces/newlines
         if not key:
             raise RuntimeError(f"No API key in ${cfg.api_key_env} or $OPENROUTER_API_KEY")
         self.cfg = cfg
@@ -60,14 +64,21 @@ class OpenRouterClient:
                 data = r.json()
                 if "error" in data:
                     raise RuntimeError(f"provider error: {data['error']}")
-                msg = data["choices"][0]["message"]
+                choice = data["choices"][0]
+                msg = choice["message"]
+                finish = choice.get("finish_reason")
                 content = msg.get("content") or ""
                 reasoning_text = msg.get("reasoning") or _join_reasoning(msg.get("reasoning_details"))
+                if finish == "length":
+                    # reasoning ate the budget, so the answer is missing or truncated: retry with more room
+                    body["max_tokens"] = min(2 * body["max_tokens"], MAX_TOKENS_CAP)
+                    if not content.strip() or attempt < self.cfg.max_retries:
+                        raise RuntimeError(f"truncated output (finish_reason=length, {len(content)} chars)")
                 if not content.strip():
-                    raise RuntimeError(f"empty content (finish_reason={data['choices'][0].get('finish_reason')})")
+                    raise RuntimeError(f"empty content (finish_reason={finish})")
                 return LLMResponse(content=content, reasoning=reasoning_text, model=data.get("model"),
                                    usage=data.get("usage") or {}, latency_s=time.time() - t0,
-                                   raw_id=data.get("id"))
+                                   raw_id=data.get("id"), finish_reason=finish)
             except (requests.RequestException, RuntimeError, ValueError, KeyError) as e:
                 last_err = f"{type(e).__name__}: {e}"
                 time.sleep(min(60, 2 ** attempt + random.random()))

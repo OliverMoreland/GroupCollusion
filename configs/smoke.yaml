@@ -9,6 +9,6 @@ communication:
   channels: [team_open, cross_dm]
 agent:
   history_window: 20
-  max_tokens: 4000
+  max_tokens: 8000
 llm:
   concurrency: 8
