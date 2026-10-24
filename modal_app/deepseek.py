@@ -31,6 +31,7 @@ PORT = 8000
 image = (
     modal.Image.from_registry("vllm/vllm-openai:v0.32.0")
     .entrypoint([])
+    .run_commands("ln -sf $(command -v python3) /usr/local/bin/python")  # Modal looks for `python` to detect the version
     .env({"HF_HUB_ENABLE_HF_TRANSFER": "0", "VLLM_USE_V1": "1"})
 )
 hf_cache = modal.Volume.from_name("groupcollusion-hf-cache", create_if_missing=True)
