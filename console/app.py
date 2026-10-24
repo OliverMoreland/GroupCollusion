@@ -141,6 +141,18 @@ def run_view(run_dir):
         for name, y in (("Nash", 0), ("monopoly", 1)):
             fig.add_hline(y=y, line_dash="dash", annotation_text=name)
         c2.plotly_chart(fig, width="stretch")
+        fig = px.line(prices, x="round", y="profit", color="firm", markers=True)
+        for name, y in (("Nash", b["nash_profit"]), ("monopoly", b["monopoly_profit"])):
+            fig.add_hline(y=y, line_dash="dash", annotation_text=name)
+        c1.plotly_chart(fig, width="stretch")
+        span = b["monopoly_profit"] - b["nash_profit"]
+        profit_index = pd.DataFrame([{"round": m["round"], "profit collusion index":
+                                      (np.mean([v["profit"] for v in m["firms"].values()]) - b["nash_profit"]) / span}
+                                     for m in markets])
+        fig = px.line(profit_index, x="round", y="profit collusion index", markers=True)
+        for name, y in (("Nash", 0), ("monopoly", 1)):
+            fig.add_hline(y=y, line_dash="dash", annotation_text=name)
+        c2.plotly_chart(fig, width="stretch")
         msgs = t.of("message")
         if msgs:
             counts = pd.DataFrame(msgs).groupby(["round", "scope"]).size().reset_index(name="messages")
