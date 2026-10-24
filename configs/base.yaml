@@ -46,11 +46,11 @@ judge:
   max_tokens: 8000
 
 llm:
-  provider: openrouter # openrouter | mock
-  api_key_env: OPENROUTER_KEY
+  provider: vllm       # vllm (our Modal server, MODAL_LLM_URL/MODAL_LLM_KEY in .env) | openrouter | mock
+  api_key_env: OPENROUTER_KEY  # openrouter only
   concurrency: 16
-  timeout: 90
-  provider_routing:    # null = let OpenRouter pick hosts per call (slower, mixed)
+  timeout: 90          # vllm uses at least 900 s (cold starts)
+  provider_routing:    # openrouter only; null = let OpenRouter pick hosts per call (slower, mixed)
     only: [baidu, gmicloud]
     allow_fallbacks: false
   max_retries: 5
