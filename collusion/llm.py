@@ -50,10 +50,13 @@ class OpenRouterClient:
         self.vllm = cfg.provider == "vllm"
         if self.vllm:
             self.base_url = os.environ.get(cfg.vllm_url_env, "").rstrip("/")
-            key = os.environ.get(cfg.vllm_key_env)
+            key = os.environ.get(cfg.vllm_key_env)  # our server's key, or a Modal proxy token "wk-<id>.ws-<secret>"
+            # a Modal Auto Endpoint serves the model under its own name (see its /v1/models)
+            self.model_override = os.environ.get(cfg.vllm_model_env) or None
             if not self.base_url:
                 raise RuntimeError(f"No vLLM endpoint in ${cfg.vllm_url_env}; deploy modal_app/deepseek.py and put its URL in .env")
         else:
+            self.model_override = None
             self.base_url = cfg.base_url
             key = os.environ.get(cfg.api_key_env) or os.environ.get("OPENROUTER_API_KEY")
         key = "".join((key or "").split())  # pasted keys sometimes carry stray spaces/newlines
@@ -90,6 +93,8 @@ class OpenRouterClient:
 
     def complete(self, messages, *, model, temperature=1.0, max_tokens=4000,
                  reasoning=True, reasoning_effort=None, hints=None) -> LLMResponse:
+        if self.vllm and self.model_override:
+            model = self.model_override
         body = {
             "model": model,
             "messages": messages,
