@@ -33,6 +33,18 @@ overrides, e.g. `--set team.structure=leader --set 'communication.channels=[team
 
 ## Model server
 
+**Default: a Modal Auto Endpoint.** Modal hosts `deepseek-ai/DeepSeek-V4-Flash-0731` for us (SGLang, tuned by Modal)
+as the dedicated endpoint `groupcollusion-v4flash` (dashboard → Endpoints, where min/max containers and scale-to-zero
+are set). On 2026-10-24 a 3-round smoke run took 126 s there, vs 290 s on our own vLLM server below and about 360 s on
+OpenRouter (per call p50 5 s, about 235 tok/s). Point runs at it with these lines in `.env`:
+
+```bash
+MODAL_LLM_URL=<endpoint URL>/v1
+MODAL_LLM_KEY=wk-<id>.ws-<secret>      # from `modal workspace proxy-tokens create`
+MODAL_LLM_MODEL=groupcollusion-v4flash # the endpoint's served model name (see its /v1/models)
+```
+
+**Fallback: our own vLLM server.**
 `modal_app/deepseek.py` serves `deepseek-ai/DeepSeek-V4-Flash` (pinned revision) with vLLM on 4×B200 on Modal,
 behind an OpenAI-compatible API with a key, under the same model name the configs use. `llm.provider: vllm` (the
 default) sends every call there; the client waits for a cold start before the first call. The server scales to

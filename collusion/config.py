@@ -79,6 +79,7 @@ class LLMConfig:
     provider: str = "vllm"
     vllm_url_env: str = "MODAL_LLM_URL"  # e.g. https://<workspace>--groupcollusion-deepseek-serve.modal.run/v1
     vllm_key_env: str = "MODAL_LLM_KEY"
+    vllm_model_env: str = "MODAL_LLM_MODEL"  # optional served-model name, e.g. for a Modal Auto Endpoint
     api_key_env: str = "OPENROUTER_KEY"  # openrouter only; falls back to OPENROUTER_API_KEY
     base_url: str = "https://openrouter.ai/api/v1"  # openrouter only
     concurrency: int = 16
