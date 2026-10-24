@@ -1,5 +1,7 @@
 """Live console over runs/**/events.jsonl: streamlit run console/app.py"""
 import json
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -209,10 +211,29 @@ runs = sorted((p.parent for p in group.glob("**/events.jsonl")), key=lambda p: p
 run = st.sidebar.selectbox("run", [None] + runs, format_func=lambda p: "(overview)" if p is None else p.name)
 refresh = st.sidebar.number_input("auto-refresh (s, 0 = off)", 0, 600, 5)
 
+with st.sidebar.expander("start a run"):
+    configs = sorted(str(p.relative_to(REPO)) for p in (REPO / "configs").glob("*.yaml"))
+    config = st.selectbox("config", configs, index=configs.index("configs/smoke.yaml") if "configs/smoke.yaml" in configs else 0)
+    sweep = st.checkbox("sweep (config has a sweep: block)", value=config.endswith(("sweep.yaml", "grid.yaml")))
+    overrides = st.text_area("overrides, one dotted key=value per line", placeholder="rounds=10\nteam.structure=leader")
+    mock = st.checkbox("mock LLM (offline, free)")
+    parallel = st.number_input("parallel runs (sweep)", 1, 64, 4) if sweep else 1
+    if st.button("start"):
+        cmd = [sys.executable, "-m", "collusion", "sweep" if sweep else "run", config]
+        cmd += [a for o in overrides.splitlines() if o.strip() for a in ("--set", o.strip())]
+        cmd += ["--mock"] * mock + (["--parallel", str(parallel)] if sweep else [])
+        log = REPO / "runs" / f"launch-{time.strftime('%Y%m%d-%H%M%S')}.log"
+        log.parent.mkdir(exist_ok=True)
+        subprocess.Popen(cmd, cwd=REPO, stdout=open(log, "w"), stderr=subprocess.STDOUT, start_new_session=True)
+        st.success(f"started; output in {log.relative_to(REPO)}. It appears under group/run once round 1 logs.")
+
 
 @st.fragment(run_every=refresh or None)
 def live():
-    overview(group) if run is None else run_view(run)
+    if run is None:
+        overview(group)
+    else:
+        run_view(run)
 
 
 live()
