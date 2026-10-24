@@ -78,7 +78,7 @@ class Simulation:
                                         max_tokens=mc.max_tokens, reasoning=mc.reasoning,
                                         reasoning_effort=mc.reasoning_effort, hints=hints)
             self.log.log("llm_call", call_id=call_id, attempt=attempt, agent=agent_id, phase=phase,
-                         round=round_no, model=resp.model or mc.model, messages=messages,
+                         round=round_no, model=resp.model or mc.model, provider=resp.provider, finish_reason=resp.finish_reason, messages=messages,
                          response=resp.content, reasoning=resp.reasoning, usage=resp.usage,
                          latency_s=round(resp.latency_s, 3), error=resp.error, hints=hints)
             if resp.error:

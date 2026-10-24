@@ -318,8 +318,19 @@ def editor_page(launch):
             llm = c["llm"]
             col = st.columns(3)
             llm["concurrency"] = col[0].number_input("Parallel API calls", 1, 128, base["llm"]["concurrency"], key=key("conc"))
-            llm["timeout"] = col[1].number_input("Timeout (s)", 10.0, 1200.0, float(base["llm"]["timeout"]), key=key("timeout"))
+            llm["timeout"] = col[1].number_input("Timeout (s)", 10.0, 1200.0, float(base["llm"]["timeout"]), key=key("timeout"),
+                                                 help="A stuck call holds up its whole phase until it times out and is retried. "
+                                                      "Most calls finish in under a minute.")
             llm["max_retries"] = col[2].number_input("Retries", 0, 20, base["llm"]["max_retries"], key=key("retries"))
+            routing = base["llm"].get("provider_routing") or {}
+            only = st.text_input("Only use these OpenRouter providers", ", ".join(routing.get("only", [])), key=key("only"),
+                                 placeholder="e.g. gmicloud, baidu (empty = let OpenRouter choose per call)",
+                                 help="OpenRouter otherwise spreads calls over many hosts of the same model, some much "
+                                      "slower than others and possibly differently quantized. Pinning a few fast ones "
+                                      "speeds runs up and keeps conditions comparable. Calls fail rather than fall back.")
+            names = [x.strip() for x in only.split(",") if x.strip()]
+            llm["provider_routing"] = {**routing, "only": names, "allow_fallbacks": False} if names else (
+                {k: v for k, v in routing.items() if k not in ("only", "allow_fallbacks")} or None)
             c["judge"]["model"] = st.text_input("Deception judge model", base["judge"]["model"], key=key("judge"),
                                                 help="Used by `--judge` to score messages for deception after a run.")
 

@@ -24,6 +24,7 @@ class LLMResponse:
     raw_id: str | None = None
     error: str | None = None
     finish_reason: str | None = None
+    provider: str | None = None
 
 
 def load_dotenv(*paths):
@@ -67,6 +68,8 @@ class OpenRouterClient:
         }
         if reasoning:
             body["reasoning"] = {"effort": reasoning_effort} if reasoning_effort else {"enabled": True}
+        if self.cfg.provider_routing:
+            body["provider"] = self.cfg.provider_routing
         last_err = None
         for attempt in range(self.cfg.max_retries + 1):
             t0 = time.time()
@@ -95,7 +98,7 @@ class OpenRouterClient:
                     raise RuntimeError(f"empty content (finish_reason={finish})")
                 return LLMResponse(content=content, reasoning=reasoning_text, model=data.get("model"),
                                    usage=data.get("usage") or {}, latency_s=time.time() - t0,
-                                   raw_id=data.get("id"), finish_reason=finish)
+                                   raw_id=data.get("id"), finish_reason=finish, provider=data.get("provider"))
             except (requests.RequestException, RuntimeError, ValueError, KeyError) as e:
                 last_err = f"{type(e).__name__}: {e}"
                 time.sleep(min(60, 2 ** attempt + random.random()))

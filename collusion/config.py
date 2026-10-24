@@ -74,6 +74,9 @@ class LLMConfig:
     concurrency: int = 16
     timeout: float = 180.0
     max_retries: int = 5
+    # OpenRouter provider preferences, sent as-is, e.g. {only: [gmicloud, baidu], allow_fallbacks: false} or
+    # {sort: throughput}; None = OpenRouter picks per call, which mixes providers of very different speed
+    provider_routing: dict | None = None
 
 
 @dataclass
