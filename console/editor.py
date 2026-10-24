@@ -16,8 +16,8 @@ from collusion.market import Market  # noqa: E402
 # rough per-call cost and per-phase latency, from DeepSeek v4 flash smoke runs (36 calls, $0.005-0.007;
 # phases take ~10-20 s with hosts pinned to Baidu/GMICloud); prompts grow with history, so long runs cost more per call
 COST_PER_CALL = 0.0002
-SECONDS_PER_PHASE = 15
-GPU_PER_HOUR = 25.0  # one Modal server, 4×B200 at $6.25/h (Oct 2026)
+SECONDS_PER_PHASE = {"vllm": 10, "openrouter": 15}  # measured on 3-round smoke runs, 2026-10-24
+GPU_PER_HOUR = 25.0  # rough: one Modal endpoint replica on 4×B200 at $6.25/h (Oct 2026)
 
 STRUCTURE_INFO = {
     "single": ("One agent per firm", "The control condition from Fish et al.: each firm is a single agent who sets its price alone."),
@@ -319,12 +319,13 @@ def editor_page(launch):
         with tabs[6]:
             st.caption("Plumbing. The defaults are fine for almost every run.")
             llm = c["llm"]
-            backends = {"vllm": "Our DeepSeek server on Modal", "openrouter": "OpenRouter"}
+            backends = {"vllm": "Modal (our DeepSeek endpoint)", "openrouter": "OpenRouter"}
             llm["provider"] = st.radio("Where the model runs", list(backends), format_func=backends.get, horizontal=True,
                                        index=list(backends).index(base["llm"]["provider"]) if base["llm"]["provider"] in backends else 0,
                                        key=key("backend"),
-                                       help="Modal: our own vLLM copy of DeepSeek V4 Flash (modal_app/deepseek.py), same weights for "
-                                            "every run, billed per GPU-hour. OpenRouter: shared hosts, billed per token.")
+                                       help="Modal: DeepSeek V4 Flash on our own Modal endpoint (whatever MODAL_LLM_URL in .env points "
+                                            "at: the Auto Endpoint by default), about 2–3× faster than OpenRouter, billed "
+                                            "per GPU-hour. OpenRouter: shared hosts, billed per token.")
             col = st.columns(3)
             llm["concurrency"] = col[0].number_input("Parallel API calls", 1, 128, base["llm"]["concurrency"], key=key("conc"))
             llm["timeout"] = col[1].number_input("Timeout (s)", 10.0, 1200.0, float(base["llm"]["timeout"]), key=key("timeout"),
@@ -388,7 +389,7 @@ def editor_page(launch):
             sizes = sorted({run["market"]["n_firms"] * run["team"]["size"] for run in grid}) or [0]
             cost_lo, cost_hi = calls_lo * COST_PER_CALL, calls_hi * COST_PER_CALL
             money = lambda x: f"${x:,.2f}" if x < 10 else f"${x:,.0f}"
-            mins = max(run["rounds"] * p for run, (_, _, p) in zip(grid, per_run)) * SECONDS_PER_PHASE / 60 if grid else 0
+            mins = max(run["rounds"] * p for run, (_, _, p) in zip(grid, per_run)) * SECONDS_PER_PHASE.get(c["llm"]["provider"], 15) / 60 if grid else 0
             col = st.columns(2)
             col[0].metric("Runs", n_runs)
             col[1].metric("Agents per run", f"{sizes[0]}" if len(sizes) == 1 else f"{sizes[0]}–{sizes[-1]}")
@@ -397,15 +398,16 @@ def editor_page(launch):
                           else f"{short(calls_lo)}–{short(calls_hi)}")
             if c["llm"]["provider"] == "vllm":
                 col[1].metric("Rough GPU cost", money(mins / 60 * GPU_PER_HOUR),
-                              help="One Modal server (4×B200) for the length of the longest run. Big parallel sweeps may "
-                                   "start a second server; the server idles down 10 minutes after the last call.")
+                              help="One Modal endpoint replica (4×B200) for the length of the longest run. Big parallel "
+                                   "sweeps may start a second one; it idles down a few minutes after the last call. "
+                                   "If it is asleep, the first call waits about 17 minutes for a cold start.")
             else:
                 col[1].metric("Rough cost", money(cost_lo) if money(cost_lo) == money(cost_hi)
                               else f"{money(cost_lo)}–{money(cost_hi)}")
             st.metric("Rough time per run" + (" (longest)" if sweep else ""),
                       f"{mins / 60:,.1f} h" if mins >= 120 else f"{mins:,.0f} min" if mins >= 1 else "< 1 min")
-            st.caption("Estimates assume about \\$0.0002 per call on OpenRouter (or \\$25/h for the Modal server, plus a few dollars "
-                       "per cold start) and 15 s per call phase. "
+            st.caption("Estimates assume about \\$0.0002 per call on OpenRouter (or \\$25/h on Modal, plus a few dollars and "
+                       "about 17 min per cold start) and 10 s (Modal) or 15 s (OpenRouter) per call phase. "
                        "Prompts grow with history, so long runs cost more. Sweeps run in parallel.")
 
         path = repo / "configs" / f"{c['name']}.yaml"
