@@ -17,6 +17,7 @@ from collusion.market import Market  # noqa: E402
 # phases take ~10-20 s with hosts pinned to Baidu/GMICloud); prompts grow with history, so long runs cost more per call
 COST_PER_CALL = 0.0002
 SECONDS_PER_PHASE = 15
+GPU_PER_HOUR = 25.0  # one Modal server, 4×B200 at $6.25/h (Oct 2026)
 
 STRUCTURE_INFO = {
     "single": ("One agent per firm", "The control condition from Fish et al.: each firm is a single agent who sets its price alone."),
@@ -318,21 +319,28 @@ def editor_page(launch):
         with tabs[6]:
             st.caption("Plumbing. The defaults are fine for almost every run.")
             llm = c["llm"]
+            backends = {"vllm": "Our DeepSeek server on Modal", "openrouter": "OpenRouter"}
+            llm["provider"] = st.radio("Where the model runs", list(backends), format_func=backends.get, horizontal=True,
+                                       index=list(backends).index(base["llm"]["provider"]) if base["llm"]["provider"] in backends else 0,
+                                       key=key("backend"),
+                                       help="Modal: our own vLLM copy of DeepSeek V4 Flash (modal_app/deepseek.py), same weights for "
+                                            "every run, billed per GPU-hour. OpenRouter: shared hosts, billed per token.")
             col = st.columns(3)
             llm["concurrency"] = col[0].number_input("Parallel API calls", 1, 128, base["llm"]["concurrency"], key=key("conc"))
             llm["timeout"] = col[1].number_input("Timeout (s)", 10.0, 1200.0, float(base["llm"]["timeout"]), key=key("timeout"),
                                                  help="A stuck call holds up its whole phase until it times out and is retried. "
                                                       "Most calls finish in under a minute.")
             llm["max_retries"] = col[2].number_input("Retries", 0, 20, base["llm"]["max_retries"], key=key("retries"))
-            routing = base["llm"].get("provider_routing") or {}
-            only = st.text_input("Only use these OpenRouter providers", ", ".join(routing.get("only", [])), key=key("only"),
-                                 placeholder="e.g. gmicloud, baidu (empty = let OpenRouter choose per call)",
-                                 help="OpenRouter otherwise spreads calls over many hosts of the same model, some much "
-                                      "slower than others and possibly differently quantized. Pinning a few fast ones "
-                                      "speeds runs up and keeps conditions comparable. Calls fail rather than fall back.")
-            names = [x.strip() for x in only.split(",") if x.strip()]
-            llm["provider_routing"] = {**routing, "only": names, "allow_fallbacks": False} if names else (
-                {k: v for k, v in routing.items() if k not in ("only", "allow_fallbacks")} or None)
+            if llm["provider"] == "openrouter":
+                routing = base["llm"].get("provider_routing") or {}
+                only = st.text_input("Only use these OpenRouter providers", ", ".join(routing.get("only", [])), key=key("only"),
+                                     placeholder="e.g. gmicloud, baidu (empty = let OpenRouter choose per call)",
+                                     help="OpenRouter otherwise spreads calls over many hosts of the same model, some much "
+                                          "slower than others and possibly differently quantized. Pinning a few fast ones "
+                                          "speeds runs up and keeps conditions comparable. Calls fail rather than fall back.")
+                names = [x.strip() for x in only.split(",") if x.strip()]
+                llm["provider_routing"] = {**routing, "only": names, "allow_fallbacks": False} if names else (
+                    {k: v for k, v in routing.items() if k not in ("only", "allow_fallbacks")} or None)
             c["judge"]["model"] = st.text_input("Deception judge model", base["judge"]["model"], key=key("judge"),
                                                 help="Used by `--judge` to score messages for deception after a run.")
 
@@ -387,11 +395,17 @@ def editor_page(launch):
             col = st.columns(2)
             col[0].metric("LLM calls", f"~{short(calls_lo)}" if short(calls_lo) == short(calls_hi)
                           else f"{short(calls_lo)}–{short(calls_hi)}")
-            col[1].metric("Rough cost", money(cost_lo) if money(cost_lo) == money(cost_hi)
-                          else f"{money(cost_lo)}–{money(cost_hi)}")
+            if c["llm"]["provider"] == "vllm":
+                col[1].metric("Rough GPU cost", money(mins / 60 * GPU_PER_HOUR),
+                              help="One Modal server (4×B200) for the length of the longest run. Big parallel sweeps may "
+                                   "start a second server; the server idles down 10 minutes after the last call.")
+            else:
+                col[1].metric("Rough cost", money(cost_lo) if money(cost_lo) == money(cost_hi)
+                              else f"{money(cost_lo)}–{money(cost_hi)}")
             st.metric("Rough time per run" + (" (longest)" if sweep else ""),
                       f"{mins / 60:,.1f} h" if mins >= 120 else f"{mins:,.0f} min" if mins >= 1 else "< 1 min")
-            st.caption("Estimates assume about $0.0002 per call and 15 s per call phase, as seen in DeepSeek smoke runs on pinned hosts. "
+            st.caption("Estimates assume about \\$0.0002 per call on OpenRouter (or \\$25/h for the Modal server, plus a few dollars "
+                       "per cold start) and 15 s per call phase. "
                        "Prompts grow with history, so long runs cost more. Sweeps run in parallel.")
 
         path = repo / "configs" / f"{c['name']}.yaml"

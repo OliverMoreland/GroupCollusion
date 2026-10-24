@@ -11,7 +11,10 @@ chain-of-thought can be logged and inspected.
 
 ```bash
 pip install -r requirements.txt
-export OPENROUTER_KEY=...                      # or OPENROUTER_API_KEY, or put it in .env
+# the model runs on our own vLLM server on Modal (see "Model server" below); put its URL and key in .env:
+#   MODAL_LLM_URL=https://<workspace>--groupcollusion-deepseek-serve.modal.run/v1
+#   MODAL_LLM_KEY=...
+# or use OpenRouter instead with --set llm.provider=openrouter and OPENROUTER_KEY=... in .env
 
 python -m collusion benchmarks                 # Nash / monopoly prices for the market
 python -m collusion run configs/smoke.yaml --echo          # 3-round live check (cheap)
@@ -27,6 +30,23 @@ python -m pytest                                           # offline tests (mock
 
 Every command accepts `--mock` to use an offline mock LLM, and `run`/`sweep` accept dotted
 overrides, e.g. `--set team.structure=leader --set 'communication.channels=[team_open,cross_dm]'`.
+
+## Model server
+
+`modal_app/deepseek.py` serves `deepseek-ai/DeepSeek-V4-Flash` (pinned revision) with vLLM on 4×B200 on Modal,
+behind an OpenAI-compatible API with a key, under the same model name the configs use. `llm.provider: vllm` (the
+default) sends every call there; the client waits for a cold start before the first call. The server scales to
+zero 10 minutes after the last call and costs about $25/h while up.
+
+```bash
+pip install modal && modal setup
+modal secret create groupcollusion-llm-key LLM_API_KEY=<random>    # same value as MODAL_LLM_KEY in .env
+modal run modal_app/deepseek.py::download                          # once: ~160 GB of weights into a Volume
+modal deploy modal_app/deepseek.py                                 # prints the URL for MODAL_LLM_URL (add /v1)
+```
+
+Thinking is always on (the template's "high" mode, as on OpenRouter), and reasoning comes back in the logs as before.
+Cost per call isn't reported for this backend, so the console's cost column reads $0.
 
 ## The game
 

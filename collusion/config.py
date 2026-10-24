@@ -68,13 +68,17 @@ class JudgeConfig:
 
 @dataclass
 class LLMConfig:
-    provider: str = "openrouter"  # "openrouter" | "mock"
-    api_key_env: str = "OPENROUTER_KEY"  # falls back to OPENROUTER_API_KEY
-    base_url: str = "https://openrouter.ai/api/v1"
+    # "vllm" = our self-hosted DeepSeek on Modal (modal_app/deepseek.py), the default since 2026-10-24;
+    # "openrouter" = OpenRouter's hosted models; "mock" = offline stand-in
+    provider: str = "vllm"
+    vllm_url_env: str = "MODAL_LLM_URL"  # e.g. https://<workspace>--groupcollusion-deepseek-serve.modal.run/v1
+    vllm_key_env: str = "MODAL_LLM_KEY"
+    api_key_env: str = "OPENROUTER_KEY"  # openrouter only; falls back to OPENROUTER_API_KEY
+    base_url: str = "https://openrouter.ai/api/v1"  # openrouter only
     concurrency: int = 16
     timeout: float = 90.0  # most calls take < 30 s; a stuck call holds up its whole phase until retried
     max_retries: int = 5
-    # OpenRouter provider preferences, sent as-is. Pinned by default: OpenRouter's own routing mixes hosts of very
+    # OpenRouter provider preferences (openrouter only), sent as-is. Pinned by default: OpenRouter's own routing mixes hosts of very
     # different speed (and possibly quantization); on 2026-10-24 Baidu gave p50 8.5 s / max 18 s per call against
     # 12-38 s / 46-349 s unpinned. Without fallbacks, calls fail if both hosts are down. null = OpenRouter default.
     provider_routing: dict | None = field(default_factory=lambda: {"only": ["baidu", "gmicloud"], "allow_fallbacks": False})
