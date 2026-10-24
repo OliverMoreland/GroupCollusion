@@ -32,7 +32,12 @@ image = (
     modal.Image.from_registry("vllm/vllm-openai:v0.32.0")
     .entrypoint([])
     .run_commands("ln -sf $(command -v python3) /usr/local/bin/python")  # Modal looks for `python` to detect the version
-    .env({"HF_HUB_ENABLE_HF_TRANSFER": "0", "VLLM_USE_V1": "1"})
+    .env({
+        "HF_HUB_ENABLE_HF_TRANSFER": "0",
+        "VLLM_USE_V1": "1",
+        # loading 160 GB from the Volume takes longer than vLLM's default 600 s engine start limit
+        "VLLM_ENGINE_READY_TIMEOUT_S": "2700",
+    })
 )
 hf_cache = modal.Volume.from_name("groupcollusion-hf-cache", create_if_missing=True)
 vllm_cache = modal.Volume.from_name("groupcollusion-vllm-cache", create_if_missing=True)
@@ -54,6 +59,8 @@ def download():
 @app.function(
     image=image,
     gpu=GPU,
+    cpu=32,
+    memory=256 * 1024,  # RAM for eager safetensors reads (one shard file at a time per rank)
     volumes=volumes,
     secrets=[modal.Secret.from_name("groupcollusion-llm-key")],
     timeout=24 * 3600,
@@ -76,6 +83,7 @@ def serve():
         "--kv-cache-dtype", "fp8",
         "--max-model-len", "65536",  # prompts are a few thousand tokens; completions are capped at 32k
         "--gpu-memory-utilization", "0.9",
+        "--safetensors-load-strategy", "eager",  # whole-file reads; much faster than mmap on a network Volume
     ]
     print(" ".join(c if c != os.environ["LLM_API_KEY"] else "<key>" for c in cmd), flush=True)
     subprocess.Popen(cmd)
