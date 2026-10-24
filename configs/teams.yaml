@@ -1,0 +1,10 @@
+# Example single run: two firms, each run by a team of 3 that votes, with an open team channel.
+name: teams_vote_teamopen
+seed: 0
+rounds: 100
+team:
+  size: 3
+  structure: vote
+communication:
+  channels: [team_open]
+  subrounds: 1

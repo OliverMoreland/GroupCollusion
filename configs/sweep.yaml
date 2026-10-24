@@ -1,0 +1,26 @@
+# Full grid: team structure x communication topology x seed.
+# python -m collusion sweep configs/sweep.yaml --dry-run   (list runs)
+# python -m collusion sweep configs/sweep.yaml --judge     (run + deception judge)
+name: sweep
+rounds: 100
+output_dir: runs/sweep
+team:
+  size: 3              # forced to 1 when structure=single
+  n_representatives: 2
+communication:
+  subrounds: 1
+
+# Named communication conditions, referenced from the sweep below.
+presets:
+  none: []
+  team_dm: [team_dm]                   # 1-on-1 inside teams
+  team_open: [team_open]               # open channel inside each team
+  cross_dm: [cross_dm]                 # 1-on-1 across teams, not inside
+  all_dm: [all_dm]                     # 1-on-1 everywhere
+  global_open: [global_open]           # one channel shared by all teams
+  team_open+global: [team_open, global_open]
+
+sweep:
+  team.structure: [single, average, vote, leader, representatives]
+  communication.channels: [none, team_dm, team_open, cross_dm, all_dm, global_open]
+  seed: [0, 1, 2]
