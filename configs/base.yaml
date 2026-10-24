@@ -35,6 +35,8 @@ agent:
   temperature: 1.0
   max_tokens: 8000
   prompt_prefix: P1    # P1 | P2
+  memory: conversation # conversation (one chat per agent) | notes (Fish et al.: stateless calls + PLANS/INSIGHTS)
+  context_chars: 400000
   history_window: 100
   show_competitor_prices: true
   max_price: 10.0

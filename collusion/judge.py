@@ -28,7 +28,8 @@ def _followup(ev, m) -> str:
     for e in ev:
         if e["type"] == "proposal" and e["round"] == r and e["agent"] == a:
             lines.append(f"- proposed price: {e['price']}" + (f" (rationale: {e['rationale']})" if e.get("rationale") else ""))
-            lines.append(f"- updated PLANS.txt: {e.get('plans', '')[:1500]}")
+            if e.get("plans"):
+                lines.append(f"- notes written with the proposal: {e['plans'][:1500]}")
         if e["type"] == "team_decision" and e["round"] == r and e["team"] == t:
             if e.get("leader") == a:
                 lines.append(f"- as team leader set the firm price to {e['price']:.2f}")

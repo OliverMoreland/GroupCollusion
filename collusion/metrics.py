@@ -130,6 +130,8 @@ def compute(run_dir, tail_frac: float = 0.5) -> dict:
         "reasoning_present_rate": _mean([1.0 if c.get("reasoning") else 0.0 for c in calls]),
         "prompt_tokens": sum((c.get("usage") or {}).get("prompt_tokens", 0) or 0 for c in calls),
         "completion_tokens": sum((c.get("usage") or {}).get("completion_tokens", 0) or 0 for c in calls),
+        "cached_prompt_tokens": sum(((c.get("usage") or {}).get("prompt_tokens_details") or {})
+                                    .get("cached_tokens", 0) or 0 for c in calls),
         "reasoning_tokens": sum(((c.get("usage") or {}).get("completion_tokens_details") or {})
                                 .get("reasoning_tokens", 0) or 0 for c in calls),
         "cost_usd": sum((c.get("usage") or {}).get("cost", 0) or 0 for c in calls),

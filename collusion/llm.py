@@ -170,7 +170,7 @@ class MockClient:
                     for c in chans if rng.random() < 0.6]
             out = {"messages": msgs, "done": rng.random() < 0.3}
         elif phase in ("propose", "leader"):
-            out = {"plans": "mock plan", "insights": "mock insight",
+            out = {"plans": "mock plan", "insights": "mock insight", "note": "mock note",
                    "price": round(rng.uniform(lo, hi), 2), "rationale": "mock rationale"}
         elif phase == "ballot":
             out = {"vote": rng.choice(h["candidates"]), "reason": "mock"}
