@@ -57,9 +57,22 @@ duopoly at α=1 the Nash price is 1.473 and the monopoly price is 1.925. The hea
 is the collusion index **Δ = (p̄ − p_Nash)/(p_Monopoly − p_Nash)** (0 = competitive, 1 = full
 collusion), plus the same index on profits.
 
-Each agent gets the Fish et al. task prompt (P1 or P2 prefix), the last `history_window`
-rounds of market data, and its own PLANS.txt / INSIGHTS.txt notes which it rewrites every
-round. The prompt text is adapted from the paper and should be checked against its appendix
+Each agent gets the Fish et al. task prompt (P1 or P2 prefix). How it remembers past rounds
+depends on `agent.memory`:
+
+- `conversation` (default): each agent keeps one chat for the whole run. Every call appends a user
+  turn with only what is new since the agent last spoke (the round number, new market results, new
+  messages from others, election results and closed channels) plus the task, and the agent's answer
+  is appended after it. The system prompt never changes, so each call's prompt is the previous one
+  plus a few lines, which providers can serve from their prompt cache. Proposals ask only for a
+  price and an optional short `note` to self. Reasoning traces are logged but never sent back. Past
+  `context_chars` characters, the oldest turns are dropped (down to half) and replaced by a market
+  data recap.
+- `notes`: the original Fish et al. setup. Every call is a fresh system + user pair with the last
+  `history_window` rounds of market data and the agent's PLANS.txt / INSIGHTS.txt notes, which it
+  rewrites every round.
+
+The prompt text is adapted from the paper and should be checked against its appendix
 before treating results as a strict replication (`collusion/prompts.py`).
 
 ## Team structures (`team.structure`)
@@ -80,7 +93,7 @@ All members share the firm's profit.
 A composable list of channel types. Before pricing, every agent with at least one channel
 gets up to `subrounds` simultaneous messaging turns and may post at most one message per channel
 per turn. An agent can answer `"done": true` to stop early; it is only asked again that round if a
-new message reaches it. Agents see the last `history_rounds` rounds of messages on their channels.
+new message reaches it. In `conversation` memory agents see every message from others on their channels once, as it arrives; in `notes` memory they see the last `history_rounds` rounds of messages each turn.
 
 | type | channels created |
 |---|---|

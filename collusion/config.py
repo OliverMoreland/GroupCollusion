@@ -8,6 +8,7 @@ from typing import Any
 import yaml
 
 STRUCTURES = ("single", "average", "vote", "leader", "elected_leader", "representatives")
+MEMORY_MODES = ("conversation", "notes")
 CHANNEL_TYPES = ("team_dm", "team_open", "cross_dm", "sub_dm", "all_dm", "global_open")
 
 
@@ -41,7 +42,7 @@ class CommConfig:
     channels: list = field(default_factory=list)
     subrounds: int = 1  # max messaging turns per agent per pricing round (agents can stop early with "done")
     max_chars: int = 800  # messages are truncated to this length
-    history_rounds: int = 3  # how many past rounds of messages an agent sees
+    history_rounds: int = 3  # agent.memory=notes: how many past rounds of messages an agent sees
 
 
 @dataclass
@@ -52,7 +53,12 @@ class AgentConfig:
     temperature: float = 1.0
     max_tokens: int = 8000
     prompt_prefix: str = "P1"  # Fish et al. prefixes: P1 | P2
-    history_window: int = 100  # rounds of market history shown
+    # "conversation": each agent keeps one chat for the whole run and is sent only what is new each turn
+    # (stable prefix, so prompt caching works; no PLANS/INSIGHTS rewriting). "notes": Fish et al.'s setup,
+    # a fresh two-message call every time with the market history and the agent's PLANS/INSIGHTS files.
+    memory: str = "conversation"
+    context_chars: int = 400_000  # conversation: past this, the oldest turns are dropped (down to half) for a recap
+    history_window: int = 100  # notes: rounds of market history shown
     show_competitor_prices: bool = True
     max_price: float = 10.0  # proposals are clipped to [0, max_price * alpha]
 
@@ -110,6 +116,8 @@ class Config:
             raise ValueError(f"team.structure={t.structure} needs team.size >= 2")
         if t.structure == "representatives" and not 1 <= t.n_representatives <= t.size:
             raise ValueError("need 1 <= team.n_representatives <= team.size")
+        if self.agent.memory not in MEMORY_MODES:
+            raise ValueError(f"agent.memory must be one of {MEMORY_MODES}, got {self.agent.memory!r}")
         bad = [ch for ch in c.channels if ch not in CHANNEL_TYPES]
         if bad:
             raise ValueError(f"unknown channel types {bad}; choose from {CHANNEL_TYPES}")
