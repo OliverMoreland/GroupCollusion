@@ -68,6 +68,8 @@ def calls_per_round(c):
     sub = c["communication"]["subrounds"] if talk else 0
     lo = hi = agents  # proposals (leaders give one decision call instead of proposing)
     phases = 1
+    if s in ("leader", "elected_leader"):  # the leader decides after reading the proposals
+        phases += 1
     if s in ("vote", "representatives"):
         voters = size if s == "vote" else c["team"]["n_representatives"]
         lo += n * voters
