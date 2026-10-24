@@ -11,7 +11,7 @@ chain-of-thought can be logged and inspected.
 
 ```bash
 pip install -r requirements.txt
-export OPENROUTER_KEY=...                      # or OPENROUTER_API_KEY
+export OPENROUTER_KEY=...                      # or OPENROUTER_API_KEY, or put it in .env
 
 python -m collusion benchmarks                 # Nash / monopoly prices for the market
 python -m collusion run configs/smoke.yaml --echo          # 3-round live check (cheap)
@@ -20,7 +20,7 @@ python -m collusion run configs/teams.yaml --judge         # teams of 3, voting,
 python -m collusion sweep configs/sweep.yaml --dry-run     # list the full grid
 python -m collusion sweep configs/sweep.yaml --judge       # run it
 python -m collusion sweep configs/grid.yaml --parallel 15  # the project grid (structure x cross-firm comms)
-streamlit run console/app.py                               # live console over runs/
+streamlit run console/app.py                               # live console over runs/ (sidebar: start a run, per-agent transcripts)
 python -m collusion report runs/sweep                      # one row per run -> report.csv
 python -m pytest                                           # offline tests (mock LLM)
 ```

@@ -110,3 +110,15 @@ def test_grid_sweep():
     runs = expand_sweep("configs/grid.yaml")
     assert len(runs) == 45
     assert not any("sub_dm" in d["communication"]["channels"] for _, d in runs if d["team"]["structure"] == "single")
+
+
+def test_load_dotenv_keeps_real_env(tmp_path, monkeypatch):
+    from collusion.llm import load_dotenv
+    env = tmp_path / ".env"
+    env.write_text("# key\nexport GC_TEST_A='a1'\nGC_TEST_B = b2\n")
+    monkeypatch.delenv("GC_TEST_A", raising=False)
+    monkeypatch.setenv("GC_TEST_B", "from-shell")
+    load_dotenv(env)
+    import os
+    assert os.environ["GC_TEST_A"] == "a1" and os.environ["GC_TEST_B"] == "from-shell"
+    monkeypatch.delenv("GC_TEST_A")

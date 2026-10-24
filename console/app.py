@@ -1,5 +1,7 @@
 """Live console over runs/**/events.jsonl: streamlit run console/app.py"""
 import json
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -202,17 +204,114 @@ def run_view(run_dir):
         st.json({"benchmarks": b, "teams": start["teams"], "leaders": start["leaders"], "config": start["config"]})
 
 
+def md(text):
+    return str(text).replace("$", "\\$")  # agents quote prices in dollars; unescaped, streamlit renders them as LaTeX
+
+
+def transcript_view(run_dir):
+    """One agent's run as a chat: what it was told, how it reasoned, what it said and did, round by round."""
+    t = tail(run_dir)
+    start = next(iter(t.of("run_start")), None)
+    if start is None:
+        st.info("Run has not started logging yet.")
+        return
+    agents = [a for team in start["teams"].values() for a in team]
+    rounds = sorted({e["round"] for e in t.events if "round" in e})
+    if not rounds:
+        st.info("No rounds logged yet.")
+        return
+    f = st.columns([1, 2, 1, 1])
+    agent = f[0].selectbox("agent", agents)
+    lo, hi = (f[1].select_slider("rounds", rounds, value=(max(rounds[0], rounds[-1] - 2), rounds[-1]))
+              if len(rounds) > 1 else (rounds[0], rounds[0]))
+    show_prompt = f[2].toggle("prompts", value=False)
+    show_reasoning = f[3].toggle("reasoning", value=True)
+    team = next(k for k, v in start["teams"].items() if agent in v)
+
+    def mine(e):
+        if not lo <= e.get("round", -1) <= hi:
+            return False
+        kind = e["type"]
+        if kind == "llm_call":
+            return e["agent"] == agent
+        if kind == "message":
+            return e["sender"] == agent or agent in e["recipients"]
+        if kind in ("proposal", "llm_error", "parse_error"):
+            return e.get("agent") == agent
+        if kind in ("team_decision", "election"):
+            return e.get("team") == team
+        return kind == "market"
+
+    shown_round = None
+    for e in filter(mine, t.events):
+        if e["round"] != shown_round:
+            shown_round = e["round"]
+            st.subheader(f"Round {shown_round}")
+        kind = e["type"]
+        if kind == "llm_call":
+            label = f"**{e['phase']}** call `{e['call_id']}`" + (f" attempt {e['attempt']}" if e.get("attempt") else "")
+            if show_prompt:
+                with st.chat_message("user"):
+                    st.markdown(label + " prompt")
+                    for msg in t.prompt(e["_offset"]):
+                        with st.expander(msg["role"], expanded=msg["role"] != "system"):
+                            st.text(msg["content"])
+            with st.chat_message("assistant"):
+                st.markdown(label + (f" | error `{e['error']}`" if e.get("error") else ""))
+                if show_reasoning and e.get("reasoning"):
+                    with st.expander("reasoning", expanded=True):
+                        st.markdown(md(e["reasoning"]))
+                st.code(e.get("response") or "(no response)", language="json", wrap_lines=True)
+        elif kind == "message":
+            who = "you" if e["sender"] == agent else e["sender"]
+            st.markdown(f"> 💬 **{who}** → `{e['channel']}` (turn {e.get('subround', '-')}): {md(e['text'])}")
+        elif kind == "proposal":
+            st.markdown(f"> 🏷️ proposed **{e['price']}**: {md(e.get('rationale', ''))}")
+        elif kind == "team_decision":
+            st.markdown(f"> 🗳️ team {team} set **{e['price']}** via {e.get('method', e['structure'])}"
+                        + (f", ballots {e['ballots']}" if e.get("ballots") else ""))
+        elif kind == "election":
+            st.markdown(f"> 🗳️ election: {json.dumps({k: v for k, v in e.items() if k not in ('t', 'type', 'call_ids')})}")
+        elif kind == "market":
+            firms = ", ".join(f"{k} p={v['price']:.2f} π={v['profit']:.1f}" for k, v in e["firms"].items())
+            st.markdown(f"> 📈 market: {firms} | Δ={e['collusion_index']:+.2f}")
+        else:
+            st.error(f"{kind}: {json.dumps({k: v for k, v in e.items() if k not in ('t', 'type')})}")
+
+
 root = Path(st.sidebar.text_input("runs directory", str(REPO / "runs")))
 groups = [root] + sorted({p.parent.parent for p in root.glob("**/events.jsonl")} - {root}, key=lambda p: p.stat().st_mtime, reverse=True)
 group = st.sidebar.selectbox("group", groups, format_func=lambda p: str(p.relative_to(root)) if p != root else "(all)")
 runs = sorted((p.parent for p in group.glob("**/events.jsonl")), key=lambda p: p.stat().st_mtime, reverse=True)
 run = st.sidebar.selectbox("run", [None] + runs, format_func=lambda p: "(overview)" if p is None else p.name)
+page = st.sidebar.radio("page", ["dashboard", "transcripts"], horizontal=True, disabled=run is None)
 refresh = st.sidebar.number_input("auto-refresh (s, 0 = off)", 0, 600, 5)
+
+with st.sidebar.expander("start a run"):
+    configs = sorted(str(p.relative_to(REPO)) for p in (REPO / "configs").glob("*.yaml"))
+    config = st.selectbox("config", configs, index=configs.index("configs/smoke.yaml") if "configs/smoke.yaml" in configs else 0)
+    sweep = st.checkbox("sweep (config has a sweep: block)", value=config.endswith(("sweep.yaml", "grid.yaml")))
+    overrides = st.text_area("overrides, one dotted key=value per line", placeholder="rounds=10\nteam.structure=leader")
+    mock = st.checkbox("mock LLM (offline, free)")
+    parallel = st.number_input("parallel runs (sweep)", 1, 64, 4) if sweep else 1
+    if st.button("start"):
+        cmd = [sys.executable, "-m", "collusion", "sweep" if sweep else "run", config]
+        cmd += [a for o in overrides.splitlines() if o.strip() for a in ("--set", o.strip())]
+        cmd += ["--mock"] * mock + (["--parallel", str(parallel)] if sweep else [])
+        log = REPO / "runs" / f"launch-{time.strftime('%Y%m%d-%H%M%S')}.log"
+        log.parent.mkdir(exist_ok=True)
+        subprocess.Popen(cmd, cwd=REPO, stdout=open(log, "w"), stderr=subprocess.STDOUT, start_new_session=True)
+        st.success(f"started; output in {log.relative_to(REPO)}. It appears under group/run once round 1 logs.")
 
 
 @st.fragment(run_every=refresh or None)
 def live():
-    overview(group) if run is None else run_view(run)
+    if run is None:
+        overview(group)
+    elif page == "transcripts":
+        transcript_view(run)
+    else:
+        run_view(run)
 
 
 live()

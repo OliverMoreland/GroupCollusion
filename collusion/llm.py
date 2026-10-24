@@ -7,6 +7,7 @@ import random
 import re
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import requests
 
@@ -25,8 +26,24 @@ class LLMResponse:
     finish_reason: str | None = None
 
 
+def load_dotenv(*paths):
+    """KEY=value lines from .env files (repo root, then cwd) into os.environ; real env vars win."""
+    for path in paths or (Path(__file__).resolve().parents[1] / ".env", Path.cwd() / ".env"):
+        if not Path(path).is_file():
+            continue
+        for line in Path(path).read_text().splitlines():
+            line = line.strip()
+            if line.startswith("export "):
+                line = line[7:]
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip("'\""))
+
+
 class OpenRouterClient:
     def __init__(self, cfg):
+        load_dotenv()
         key = os.environ.get(cfg.api_key_env) or os.environ.get("OPENROUTER_API_KEY")
         key = "".join((key or "").split())  # pasted keys sometimes carry stray spaces/newlines
         if not key:
