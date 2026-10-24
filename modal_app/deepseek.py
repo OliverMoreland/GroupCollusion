@@ -60,7 +60,7 @@ def download():
     image=image,
     gpu=GPU,
     cpu=32,
-    memory=256 * 1024,  # RAM for eager safetensors reads (one shard file at a time per rank)
+    memory=256 * 1024,  # room for vLLM's prefetch of the checkpoint (eager loading fails on its F8_E8M0 scales)
     volumes=volumes,
     secrets=[modal.Secret.from_name("groupcollusion-llm-key")],
     timeout=24 * 3600,
@@ -83,7 +83,6 @@ def serve():
         "--kv-cache-dtype", "fp8",
         "--max-model-len", "65536",  # prompts are a few thousand tokens; completions are capped at 32k
         "--gpu-memory-utilization", "0.9",
-        "--safetensors-load-strategy", "eager",  # whole-file reads; much faster than mmap on a network Volume
     ]
     print(" ".join(c if c != os.environ["LLM_API_KEY"] else "<key>" for c in cmd), flush=True)
     subprocess.Popen(cmd)
