@@ -13,10 +13,10 @@ from collusion.__main__ import expand_sweep
 from collusion.config import CHANNEL_TYPES, STRUCTURES, Config, config_from_dict
 from collusion.market import Market  # noqa: E402
 
-# rough per-call cost and per-phase latency, from the 3-round DeepSeek v4 flash smoke runs (36 calls, $0.005-0.007,
-# ~70 s per round); prompts grow with history, so long runs cost more per call
+# rough per-call cost and per-phase latency, from DeepSeek v4 flash smoke runs (36 calls, $0.005-0.007;
+# phases take ~10-20 s with hosts pinned to Baidu/GMICloud); prompts grow with history, so long runs cost more per call
 COST_PER_CALL = 0.0002
-SECONDS_PER_PHASE = 20
+SECONDS_PER_PHASE = 15
 
 STRUCTURE_INFO = {
     "single": ("One agent per firm", "The control condition from Fish et al.: each firm is a single agent who sets its price alone."),
@@ -389,7 +389,7 @@ def editor_page(launch):
                           else f"{money(cost_lo)}–{money(cost_hi)}")
             st.metric("Rough time per run" + (" (longest)" if sweep else ""),
                       f"{mins / 60:,.1f} h" if mins >= 120 else f"{mins:,.0f} min" if mins >= 1 else "< 1 min")
-            st.caption("Estimates assume about $0.0002 and 20 s per call phase, as seen in DeepSeek smoke runs. "
+            st.caption("Estimates assume about $0.0002 per call and 15 s per call phase, as seen in DeepSeek smoke runs on pinned hosts. "
                        "Prompts grow with history, so long runs cost more. Sweeps run in parallel.")
 
         path = repo / "configs" / f"{c['name']}.yaml"

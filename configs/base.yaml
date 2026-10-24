@@ -49,5 +49,8 @@ llm:
   provider: openrouter # openrouter | mock
   api_key_env: OPENROUTER_KEY
   concurrency: 16
-  timeout: 180
+  timeout: 90
+  provider_routing:    # null = let OpenRouter pick hosts per call (slower, mixed)
+    only: [baidu, gmicloud]
+    allow_fallbacks: false
   max_retries: 5

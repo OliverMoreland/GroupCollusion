@@ -72,11 +72,12 @@ class LLMConfig:
     api_key_env: str = "OPENROUTER_KEY"  # falls back to OPENROUTER_API_KEY
     base_url: str = "https://openrouter.ai/api/v1"
     concurrency: int = 16
-    timeout: float = 180.0
+    timeout: float = 90.0  # most calls take < 30 s; a stuck call holds up its whole phase until retried
     max_retries: int = 5
-    # OpenRouter provider preferences, sent as-is, e.g. {only: [gmicloud, baidu], allow_fallbacks: false} or
-    # {sort: throughput}; None = OpenRouter picks per call, which mixes providers of very different speed
-    provider_routing: dict | None = None
+    # OpenRouter provider preferences, sent as-is. Pinned by default: OpenRouter's own routing mixes hosts of very
+    # different speed (and possibly quantization); on 2026-10-24 Baidu gave p50 8.5 s / max 18 s per call against
+    # 12-38 s / 46-349 s unpinned. Without fallbacks, calls fail if both hosts are down. null = OpenRouter default.
+    provider_routing: dict | None = field(default_factory=lambda: {"only": ["baidu", "gmicloud"], "allow_fallbacks": False})
 
 
 @dataclass
