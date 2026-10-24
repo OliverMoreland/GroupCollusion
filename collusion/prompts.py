@@ -35,6 +35,9 @@ STRUCTURE_TEXT = {
              "are broken at random)."),
     "leader": ("{leader} is the team's decision-maker. Each round the other members submit a proposed "
                "price with advice, and {leader} reads them and sets firm {team}'s price."),
+    "elected_leader": ("The team elects a leader from among its members {elect_when} (most votes wins, ties "
+                       "broken at random). Each round the other members submit a proposed price with advice, "
+                       "and the leader reads them and sets firm {team}'s price. Current leader: {leader}."),
     "representatives": ("The team elects {k} representative(s) from among its members. Each round every "
                         "member proposes a price, then only the representatives vote on the proposals; "
                         "the proposal with the most representative votes becomes firm {team}'s price "
@@ -55,9 +58,11 @@ def system_prompt(cfg, agent_id: str, team: str, team_members: list[str], channe
               f"firm {team} (teammates: {others}). All members share firm {team}'s profit. ")
     else:
         s += f"\n\nYou are agent {agent_id} and you run firm {team}. "
+    k = cfg.team.reelect_every
     s += STRUCTURE_TEXT[cfg.team.structure].format(
-        team=team, leader=leader, k=cfg.team.n_representatives,
-        reps=", ".join(reps) if reps else "not yet elected")
+        team=team, leader=leader or "not yet elected", k=cfg.team.n_representatives,
+        reps=", ".join(reps) if reps else "not yet elected",
+        elect_when=f"every {k} rounds" if k else "once, at the start")
     if channels:
         s += "\n\nYou can send and receive text messages on these channels:"
         for c in channels:
@@ -109,10 +114,11 @@ def context(round_no: int, history_txt: str, notes: dict, msgs_txt: str | None) 
 
 
 MESSAGE_TASK = (
-    "You may now send messages before prices are set this round (message turn {sub} of {n}). "
+    "You may now send messages before prices are set this round (message turn {sub} of at most {n}). "
     "Valid channels: {channels}. You may send at most one message per channel, or none at all. "
-    "Respond with only a JSON object: "
-    '{{"messages": [{{"channel": "<channel id>", "text": "<message>"}}]}}'
+    'Set "done" to true if you have nothing more to say this round; you will only be asked again '
+    "this round if a new message reaches you. Respond with only a JSON object: "
+    '{{"messages": [{{"channel": "<channel id>", "text": "<message>"}}], "done": <true|false>}}'
 )
 
 PROPOSE_TASK = (
@@ -128,6 +134,12 @@ LEADER_INPUT = "Proposals and advice from your teammates this round:\n{items}"
 BALLOT_TASK = (
     "Your team's proposals this round are:\n{items}\n\nVote for exactly one proposal (you may vote for "
     'your own). Respond with only a JSON object: {{"vote": "<proposer id>", "reason": "<short reason>"}}'
+)
+
+LEADER_ELECTION_TASK = (
+    "Your team must elect a leader, who will read the team's proposals and advice and set the firm's "
+    'price. Candidates: {cands}. You may vote for yourself. Respond with only a JSON object: '
+    '{{"representatives": [<the one candidate id you vote for>]}}'
 )
 
 ELECTION_TASK = (

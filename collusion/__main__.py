@@ -1,7 +1,7 @@
 """CLI.
 
     python -m collusion run configs/base.yaml [--set team.structure=vote ...] [--mock] [--echo]
-    python -m collusion sweep configs/sweep.yaml [--mock] [--dry-run]
+    python -m collusion sweep configs/sweep.yaml [--mock] [--dry-run] [--parallel N]
     python -m collusion judge runs/<run> [--model ...] [--mock] [--limit N]
     python -m collusion report runs/            # one row per run -> runs/report.csv
     python -m collusion show runs/<run> [--round 3] [--agent A1] [--phase message] [--no-prompt]
@@ -13,6 +13,7 @@ import argparse
 import itertools
 import json
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pandas as pd
@@ -67,12 +68,13 @@ def expand_sweep(path: str, extra_overrides=None) -> list[tuple[str, dict]]:
                 parts.append(f"{k.split('.')[-1]}={v}")
             ov[k] = v
         data = apply_overrides(base, ov)
-        # structure=single implies a team of one, so within-team channels don't exist;
-        # drop combos that are then identical to one already listed
+        # structure=single implies a team of one, so within-team channels don't exist, and the
+        # sole agent is its firm's decision-maker, so sub_dm is closed to it; drop combos that
+        # are then identical to one already listed
         if data.get("team", {}).get("structure") == "single":
             data["team"]["size"] = 1
             chans = data.get("communication", {}).get("channels") or []
-            chans = ["cross_dm" if c == "all_dm" else c for c in chans if c not in ("team_dm", "team_open")]
+            chans = ["cross_dm" if c == "all_dm" else c for c in chans if c not in ("team_dm", "team_open", "sub_dm")]
             data.setdefault("communication", {})["channels"] = list(dict.fromkeys(chans))
             key = json.dumps({k: v for k, v in data.items() if k != "name"}, sort_keys=True)
             if key in seen:
@@ -88,19 +90,27 @@ def cmd_sweep(a):
     from .simulation import Simulation
     runs = expand_sweep(a.config, (["llm.provider=mock"] if a.mock else []) + list(a.set or []))
     print(f"{len(runs)} runs")
-    for name, data in runs:
-        cfg = config_from_dict(data)
-        if a.dry_run:
+    if a.dry_run:
+        for name, _ in runs:
             print("  ", name)
-            continue
-        sim = Simulation(cfg, echo=a.echo)
-        s = sim.run()
-        if a.judge:
-            from .judge import judge_run
-            s = judge_run(sim.run_dir)
-        print(_headline(s), flush=True)
-    if not a.dry_run:
-        cmd_report(argparse.Namespace(runs_dir=runs[0][1].get("output_dir", "runs")))
+        return
+
+    def one(item):
+        name, data = item
+        try:
+            sim = Simulation(config_from_dict(data), echo=a.echo)
+            s = sim.run()
+            if a.judge:
+                from .judge import judge_run
+                s = judge_run(sim.run_dir)
+            print(_headline(s), flush=True)
+        except Exception as e:  # one failed run shouldn't stop the rest of the grid
+            print(f"FAILED {name}: {type(e).__name__}: {e}", flush=True)
+
+    # each run already fans out its own LLM calls; --parallel runs several games at once
+    with ThreadPoolExecutor(a.parallel) as pool:
+        list(pool.map(one, runs))
+    cmd_report(argparse.Namespace(runs_dir=runs[0][1].get("output_dir", "runs")))
 
 
 def cmd_judge(a):
@@ -186,6 +196,7 @@ def main(argv=None):
     s.add_argument("--echo", action="store_true")
     s.add_argument("--judge", action="store_true")
     s.add_argument("--dry-run", action="store_true")
+    s.add_argument("--parallel", type=int, default=1, help="number of runs to play at the same time")
     s.set_defaults(fn=cmd_sweep)
 
     j = sub.add_parser("judge")

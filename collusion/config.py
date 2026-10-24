@@ -7,8 +7,8 @@ from typing import Any
 
 import yaml
 
-STRUCTURES = ("single", "average", "vote", "leader", "representatives")
-CHANNEL_TYPES = ("team_dm", "team_open", "cross_dm", "all_dm", "global_open")
+STRUCTURES = ("single", "average", "vote", "leader", "elected_leader", "representatives")
+CHANNEL_TYPES = ("team_dm", "team_open", "cross_dm", "sub_dm", "all_dm", "global_open")
 
 
 @dataclass
@@ -31,7 +31,7 @@ class TeamConfig:
     structure: str = "single"  # one of STRUCTURES
     leader: str = "first"  # "first" | "random"  (structure=leader)
     n_representatives: int = 1  # structure=representatives
-    reelect_every: int = 0  # 0 = elect once at round 1; k = re-elect every k rounds
+    reelect_every: int = 0  # representatives / elected_leader: 0 = elect once at round 1; k = re-elect every k rounds
     ballot_shows_rationales: bool = True  # voters see the proposers' rationales
 
 
@@ -39,7 +39,7 @@ class TeamConfig:
 class CommConfig:
     # Composable list of channel types (see CHANNEL_TYPES); [] = no communication.
     channels: list = field(default_factory=list)
-    subrounds: int = 1  # messaging turns per pricing round
+    subrounds: int = 1  # max messaging turns per agent per pricing round (agents can stop early with "done")
     max_chars: int = 800  # messages are truncated to this length
     history_rounds: int = 3  # how many past rounds of messages an agent sees
 

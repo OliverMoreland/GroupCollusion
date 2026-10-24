@@ -19,6 +19,8 @@ python -m collusion run configs/base.yaml                  # Fish et al. replica
 python -m collusion run configs/teams.yaml --judge         # teams of 3, voting, team channel
 python -m collusion sweep configs/sweep.yaml --dry-run     # list the full grid
 python -m collusion sweep configs/sweep.yaml --judge       # run it
+python -m collusion sweep configs/grid.yaml --parallel 15  # the project grid (structure x cross-firm comms)
+streamlit run console/app.py                               # live console over runs/
 python -m collusion report runs/sweep                      # one row per run -> report.csv
 python -m pytest                                           # offline tests (mock LLM)
 ```
@@ -48,6 +50,7 @@ before treating results as a strict replication (`collusion/prompts.py`).
 | `average` | every member proposes; price = mean of proposals |
 | `vote` | every member proposes (with a rationale), then every member votes for one proposal; plurality wins, ties random |
 | `leader` | non-leaders propose with advice; the leader reads it and sets the price |
+| `elected_leader` | like `leader`, but members elect the leader on round 1 and every `reelect_every` rounds |
 | `representatives` | the team elects `n_representatives` members (once, or every `reelect_every` rounds); everyone proposes, only representatives vote |
 
 All members share the firm's profit.
@@ -55,8 +58,9 @@ All members share the firm's profit.
 ## Communication (`communication.channels`)
 
 A composable list of channel types. Before pricing, every agent with at least one channel
-gets `subrounds` simultaneous messaging turns and may post at most one message per channel
-per turn. Agents see the last `history_rounds` rounds of messages on their channels.
+gets up to `subrounds` simultaneous messaging turns and may post at most one message per channel
+per turn. An agent can answer `"done": true` to stop early; it is only asked again that round if a
+new message reaches it. Agents see the last `history_rounds` rounds of messages on their channels.
 
 | type | channels created |
 |---|---|
@@ -64,10 +68,24 @@ per turn. Agents see the last `history_rounds` rounds of messages on their chann
 | `team_dm` | 1-on-1 between teammates |
 | `team_open` | one open channel per team |
 | `cross_dm` | 1-on-1 between agents on different teams (none inside teams) |
+| `sub_dm` | like `cross_dm`, but closed to current decision-makers (leader, elected leader, representatives, a single-agent firm's agent) |
 | `all_dm` | 1-on-1 between every pair of agents |
 | `global_open` | one open channel shared by all agents of all teams |
 
 Combine freely, e.g. `[team_open, cross_dm]`. `configs/sweep.yaml` names presets for the grid.
+
+`configs/grid.yaml` is the project grid: `vote` / `leader` / `elected_leader` (every 5 rounds) /
+`single` x cross-firm comms `none` / `sub_dm` / `cross_dm` / `global_open`, with a private team
+channel in every condition, 5 firms of 5 agents, 3 messaging turns, 3 seeds (45 runs; single x
+sub_dm is undefined and dropped). `sweep --parallel N` plays N runs at once.
+
+## Live console
+
+`streamlit run console/app.py` reads `runs/**/events.jsonl` as it is written (refreshes every
+5 s): a heatmap of the collusion index over the grid with run status and cost, and per run the
+prices against Nash / monopoly, message volume, leader deviation from advice, a searchable
+message feed (with judge scores once judged), every call's reasoning / response / prompt,
+elections, and errors.
 
 ## Observability
 
@@ -112,6 +130,7 @@ collusion/
   metrics.py     summary / CSV / transcript from events.jsonl
   judge.py       LLM-as-judge deception scoring
   __main__.py    CLI
-configs/         base (replication), teams, smoke, sweep
+console/app.py   live streamlit console
+configs/         base (replication), teams, smoke, sweep, grid
 tests/           offline tests using the mock LLM
 ```

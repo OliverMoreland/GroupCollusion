@@ -9,6 +9,8 @@ Channel *types* compose; a config lists any subset of:
     team_dm      1-on-1 between teammates
     team_open    one open channel per team
     cross_dm     1-on-1 between agents of different teams (not within a team)
+    sub_dm       like cross_dm, but closed to whoever currently makes their firm's decision
+                 (leader / elected leader / representatives; the sole agent of a single-agent firm)
     all_dm       1-on-1 between every pair (= team_dm + cross_dm)
     global_open  one channel shared by all agents of all teams
 """
@@ -25,6 +27,7 @@ class Channel:
     members: tuple
     kind: str  # "dm" | "open"
     scope: str  # "intra_team" | "inter_team"
+    leaderless: bool = False  # sub_dm: inactive while either member is a decision-maker
 
 
 @dataclass
@@ -48,15 +51,17 @@ def build_channels(teams: dict[str, list[str]], types: list[str]) -> dict[str, C
     if "all_dm" in types:
         types |= {"team_dm", "cross_dm"}
 
-    def dm(x, y):
+    def dm(x, y, leaderless=False):
         a, b = sorted((x, y))
         scope = "intra_team" if team_of(a) == team_of(b) else "inter_team"
-        chans[f"dm:{a}|{b}"] = Channel(f"dm:{a}|{b}", (a, b), "dm", scope)
+        chans[f"dm:{a}|{b}"] = Channel(f"dm:{a}|{b}", (a, b), "dm", scope, leaderless)
 
     for x, y in itertools.combinations(everyone, 2):
         same = team_of(x) == team_of(y)
         if (same and "team_dm" in types) or (not same and "cross_dm" in types):
             dm(x, y)
+        elif not same and "sub_dm" in types:
+            dm(x, y, leaderless=True)
     if "team_open" in types:
         for t, members in teams.items():
             if len(members) > 1:
@@ -71,14 +76,17 @@ class ChannelHub:
         self.channels = channels
         self.max_chars = max_chars
         self.messages: list[Message] = []
+        self.blocked: set = set()  # current decision-makers, shut out of leaderless channels
         self._lock = threading.Lock()
 
     def channels_for(self, agent_id: str) -> list[Channel]:
-        return [c for c in self.channels.values() if agent_id in c.members]
+        """Channels the agent can post to right now."""
+        return [c for c in self.channels.values()
+                if agent_id in c.members and not (c.leaderless and self.blocked & set(c.members))]
 
     def post(self, msg: Message) -> Message | None:
         ch = self.channels.get(msg.channel)
-        if ch is None or msg.sender not in ch.members:
+        if ch is None or ch not in self.channels_for(msg.sender):
             return None
         msg.text = msg.text[: self.max_chars]
         with self._lock:
@@ -87,7 +95,7 @@ class ChannelHub:
 
     def visible(self, agent_id: str, since_round: int, before: tuple | None = None) -> list[Message]:
         """Messages in the agent's channels from `since_round` on, strictly before (round, subround)."""
-        mine = {c.id for c in self.channels_for(agent_id)}
+        mine = {c.id for c in self.channels.values() if agent_id in c.members}  # incl. channels since closed
         out = [m for m in self.messages if m.channel in mine and m.round >= since_round]
         if before is not None:
             out = [m for m in out if (m.round, m.subround) < before]

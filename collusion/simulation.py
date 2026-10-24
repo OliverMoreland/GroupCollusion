@@ -1,10 +1,10 @@
 """Repeated Bertrand game played by teams of LLM agents.
 
 Each round:
-  1. (representatives only) elections, on round 1 and every `reelect_every` rounds
-  2. communication: `subrounds` simultaneous messaging turns on the configured channels
+  1. (representatives / elected_leader) elections, on round 1 and every `reelect_every` rounds
+  2. communication: up to `subrounds` simultaneous messaging turns on the configured channels
   3. proposals: every member (except a leader) proposes a price and rewrites its notes
-  4. aggregation by team structure: single | average | vote | leader | representatives
+  4. aggregation by team structure: single | average | vote | leader | elected_leader | representatives
   5. market clears; every firm sees its price, quantity, profit (and competitors' prices)
 """
 from __future__ import annotations
@@ -119,7 +119,9 @@ class Simulation:
 
     # ---------------------------------------------------------------- phases
     def phase_election(self, r):
-        k = self.cfg.team.n_representatives
+        leader_vote = self.cfg.team.structure == "elected_leader"
+        k = 1 if leader_vote else self.cfg.team.n_representatives
+        task = P.LEADER_ELECTION_TASK if leader_vote else P.ELECTION_TASK
 
         def one(aid):
             cands = self.teams[self.agents[aid].team]
@@ -133,7 +135,7 @@ class Simulation:
                     return None, f"need exactly {k} distinct ids from {cands}"
                 return reps, None
 
-            user = self.context(aid, r) + "\n\n" + P.ELECTION_TASK.format(k=k, cands=", ".join(cands))
+            user = self.context(aid, r) + "\n\n" + task.format(k=k, cands=", ".join(cands))
             reps, cid = self.ask(aid, "election", r, user, validate, {"candidates": cands, "k": k})
             return aid, reps, cid
 
@@ -141,15 +143,31 @@ class Simulation:
         for t, members in self.teams.items():
             tally = Counter(x for aid, reps, _ in results if self.agents[aid].team == t for x in (reps or []))
             order = sorted(members, key=lambda m: (-tally[m], self.rng.random()))
-            self.reps[t] = sorted(order[:k])
-            self.log.log("election", round=r, team=t, representatives=self.reps[t], tally=dict(tally),
+            winners = sorted(order[:k])
+            if leader_vote:
+                self.leaders[t] = winners[0]
+            else:
+                self.reps[t] = winners
+            self.log.log("election", round=r, team=t, representatives=winners, tally=dict(tally),
                          ballots={aid: reps for aid, reps, _ in results if self.agents[aid].team == t},
                          call_ids={aid: cid for aid, _, cid in results if self.agents[aid].team == t})
+
+    def decision_makers(self) -> set:
+        if self.cfg.team.structure == "single":
+            return set(self.agents)
+        return set(self.leaders.values()) | {a for reps in self.reps.values() for a in reps}
 
     def phase_messages(self, r):
         cc = self.cfg.communication
         talkers = [a for a in self.agents if self.hub.channels_for(a)]
+        done, last_turn = set(), {}
         for sub in range(1, cc.subrounds + 1):
+            # an agent that said "done" is only asked again if someone else has written to it since
+            active = [a for a in talkers if a not in done or any(
+                m.sender != a and m.subround >= last_turn[a] for m in self.hub.visible(a, r))]
+            if not active:
+                break
+
             def one(aid):
                 chans = [c.id for c in self.hub.channels_for(aid)]
 
@@ -164,16 +182,18 @@ class Simulation:
                         if m["channel"] not in seen:
                             seen.add(m["channel"])
                             out.append(m)
-                    return out, None
+                    return {"messages": out, "done": o.get("done") is True}, None
 
                 user = self.context(aid, r, before=(r, sub)) + "\n\n" + P.MESSAGE_TASK.format(
                     sub=sub, n=cc.subrounds, channels=", ".join(chans))
-                msgs, cid = self.ask(aid, "message", r, user, validate, {"channels": chans, "subround": sub})
-                return aid, msgs or [], cid
+                out, cid = self.ask(aid, "message", r, user, validate, {"channels": chans, "subround": sub})
+                return aid, out or {"messages": [], "done": True}, cid
 
             # simultaneous: everyone writes, then all messages are delivered
-            for aid, msgs, cid in self.pmap(one, talkers):
-                for m in msgs:
+            for aid, out, cid in self.pmap(one, active):
+                last_turn[aid] = sub
+                (done.add if out["done"] else done.discard)(aid)
+                for m in out["messages"]:
                     posted = self.hub.post(Message(r, sub, m["channel"], aid, str(m["text"]).strip(), cid))
                     if posted:
                         ch = self.hub.channels[posted.channel]
@@ -199,7 +219,7 @@ class Simulation:
         s = self.cfg.team.structure
         if leader_phase or s in ("single", "average"):
             return ""
-        if s == "leader":
+        if s in ("leader", "elected_leader"):
             return ', "advice": "<advice for your team leader>"'
         return ', "rationale": "<short justification shown to your teammates>"'
 
@@ -251,7 +271,7 @@ class Simulation:
         valid = {a: props[a] for a in members if a in props and props[a]["price"] is not None}
         rec = {"round": r, "team": team, "structure": s,
                "proposals": {a: props.get(a, {}).get("price") for a in members}}
-        if s == "leader":
+        if s in ("leader", "elected_leader"):
             leader = self.leaders[team]
             rec["leader"] = leader
             items = "\n".join(f"- {a}: ${p['price']:.2f} — {p.get('rationale') or '(no advice)'}"
@@ -293,10 +313,11 @@ class Simulation:
     # ------------------------------------------------------------------ run
     def step(self, r):
         s = self.cfg.team.structure
-        if s == "representatives":
+        if s in ("representatives", "elected_leader"):
             k = self.cfg.team.reelect_every
             if r == 1 or (k and (r - 1) % k == 0):
                 self.phase_election(r)
+        self.hub.blocked = self.decision_makers()
         if self.hub.channels:
             self.phase_messages(r)
         props = self.phase_proposals(r)
@@ -320,7 +341,7 @@ class Simulation:
         with open(self.run_dir / "config.yaml", "w") as f:
             yaml.safe_dump(cfg.to_dict(), f, sort_keys=False)
         self.log.log("run_start", config=cfg.to_dict(), benchmarks=self.bench, teams=self.teams,
-                     leaders=self.leaders, channels={c.id: {"members": c.members, "kind": c.kind, "scope": c.scope}
+                     leaders=self.leaders, channels={c.id: {"members": c.members, "kind": c.kind, "scope": c.scope, "leaderless": c.leaderless}
                                                      for c in self.hub.channels.values()})
         try:
             for r in range(1, cfg.rounds + 1):

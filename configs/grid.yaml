@@ -1,0 +1,31 @@
+# The project grid: firm decision structure x cross-firm communication, 15 cells x 3 seeds.
+#   structures: vote (egalitarian), leader (dictator), elected_leader (re-elected every 5 rounds), single
+#   comms:      none, subagent (cross-firm 1-on-1 except decision-makers), cross (any cross-firm 1-on-1), open
+# Every condition keeps a private open channel inside each firm (team_open). single x subagent is
+# undefined (no subagents) and is dropped as a duplicate of single x none.
+# python -m collusion sweep configs/grid.yaml --dry-run
+# python -m collusion sweep configs/grid.yaml --parallel 15 --judge
+name: grid
+rounds: 50
+output_dir: runs/grid
+market:
+  n_firms: 5
+  alpha: 3.2           # Fish et al. scale; keeps prices away from textbook values
+team:
+  size: 5              # forced to 1 when structure=single
+  reelect_every: 5     # elected_leader
+communication:
+  subrounds: 3         # max messaging turns per agent per round
+agent:
+  history_window: 20
+
+presets:
+  none: [team_open]
+  subagent: [team_open, sub_dm]
+  cross: [team_open, cross_dm]
+  open: [team_open, global_open]
+
+sweep:
+  team.structure: [vote, leader, elected_leader, single]
+  communication.channels: [none, subagent, cross, open]
+  seed: [0, 1, 2]

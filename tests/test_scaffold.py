@@ -88,3 +88,25 @@ def test_sweep_expansion_dedupes_single():
     singles = [d for _, d in runs if d["team"]["structure"] == "single"]
     assert all(d["team"]["size"] == 1 for d in singles)
     assert all(c in CHANNEL_TYPES for _, d in runs for c in d["communication"]["channels"])
+
+
+def test_sub_dm_excludes_decision_makers(tmp_path):
+    cfg = load_config(None, ["team.structure=elected_leader", "team.size=3", "team.reelect_every=2", "rounds=5",
+                             "communication.subrounds=3", "llm.provider=mock",
+                             "communication.channels=[team_open, sub_dm]"])
+    Simulation(cfg, run_dir=tmp_path / "run").run()
+    ev = read_events(tmp_path / "run")
+    elections = [e for e in ev if e["type"] == "election"]
+    assert sorted({e["round"] for e in elections}) == [1, 3, 5]
+    leader_at = lambda r, t: max((e for e in elections if e["team"] == t and e["round"] <= r), key=lambda e: e["round"])["representatives"][0]
+    cross = [m for m in ev if m["type"] == "message" and m["scope"] == "inter_team"]
+    assert cross
+    for m in cross:
+        assert all(a != leader_at(m["round"], a[0]) for a in [m["sender"], *m["recipients"]])
+    assert all(d["method"] in ("leader", "previous_price", "nash_price") for d in ev if d["type"] == "team_decision")
+
+
+def test_grid_sweep():
+    runs = expand_sweep("configs/grid.yaml")
+    assert len(runs) == 45
+    assert not any("sub_dm" in d["communication"]["channels"] for _, d in runs if d["team"]["structure"] == "single")

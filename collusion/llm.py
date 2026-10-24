@@ -101,7 +101,7 @@ class MockClient:
             chans = h.get("channels", [])
             msgs = [{"channel": c, "text": f"mock note on {c}: thinking about ${rng.uniform(lo, hi):.2f}"}
                     for c in chans if rng.random() < 0.6]
-            out = {"messages": msgs}
+            out = {"messages": msgs, "done": rng.random() < 0.3}
         elif phase in ("propose", "leader"):
             out = {"plans": "mock plan", "insights": "mock insight",
                    "price": round(rng.uniform(lo, hi), 2), "rationale": "mock rationale"}
