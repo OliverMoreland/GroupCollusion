@@ -20,7 +20,7 @@ python -m collusion run configs/teams.yaml --judge         # teams of 3, voting,
 python -m collusion sweep configs/sweep.yaml --dry-run     # list the full grid
 python -m collusion sweep configs/sweep.yaml --judge       # run it
 python -m collusion sweep configs/grid.yaml --parallel 15  # the project grid (structure x cross-firm comms)
-streamlit run console/app.py                               # live console over runs/ (sidebar: start a run, per-agent transcripts)
+streamlit run console/app.py                               # live console over runs/ (sidebar: start a run, transcripts, new-config editor)
 python -m collusion report runs/sweep                      # one row per run -> report.csv
 python -m pytest                                           # offline tests (mock LLM)
 ```

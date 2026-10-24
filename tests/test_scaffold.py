@@ -122,3 +122,15 @@ def test_load_dotenv_keeps_real_env(tmp_path, monkeypatch):
     import os
     assert os.environ["GC_TEST_A"] == "a1" and os.environ["GC_TEST_B"] == "from-shell"
     monkeypatch.delenv("GC_TEST_A")
+
+
+def test_console_editor_estimates_match_smoke_run():
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "console"))
+    from editor import _load, calls_per_round, problems
+    c, _, _ = _load(Path(__file__).resolve().parents[1] / "configs" / "smoke.yaml")
+    assert calls_per_round(c)[:2] == (12, 12)  # 4 messages + 4 proposals + 4 ballots: the live smoke run made 36 calls in 3 rounds
+    assert problems(c) == ([], [])
+    c["team"]["structure"], c["communication"]["channels"] = "single", ["sub_dm"]
+    assert problems(c)[0]
