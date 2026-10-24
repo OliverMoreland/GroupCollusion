@@ -59,7 +59,7 @@ def download():
     scaledown_window=SCALEDOWN_S,
     max_containers=MAX_CONTAINERS,
 )
-@modal.concurrent(max_inputs=1000, target_inputs=500)  # Modal caps max_inputs at 1000  # vLLM batches internally; a sweep sends ~25 calls per run
+@modal.concurrent(max_inputs=1000, target_inputs=500)  # 1000 is Modal's cap; vLLM batches internally
 @modal.web_server(port=PORT, startup_timeout=45 * 60)
 def serve():
     cmd = [
