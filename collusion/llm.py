@@ -1,6 +1,7 @@
-"""LLM clients: OpenRouter (OpenAI-compatible, with reasoning traces) and a deterministic mock."""
+"""LLM clients: OpenRouter / Modal vLLM / OpenAI (with reasoning traces or summaries) and a deterministic mock."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import random
@@ -12,6 +13,8 @@ from pathlib import Path
 import requests
 
 MAX_TOKENS_CAP = 32000
+# USD per million tokens (input, cached input, output) for models called on OpenAI directly, which reports no cost
+OPENAI_PRICES = {"gpt-6-luna": (0.10, 0.01, 0.50)}
 
 
 @dataclass
@@ -43,12 +46,18 @@ def load_dotenv(*paths):
 
 
 class OpenRouterClient:
-    """OpenAI-compatible chat client for OpenRouter, or for our vLLM server on Modal (provider=vllm)."""
+    """OpenAI-compatible chat client for OpenRouter, our vLLM server on Modal (provider=vllm), or OpenAI itself (provider=openai)."""
 
     def __init__(self, cfg):
         load_dotenv()
         self.vllm = cfg.provider == "vllm"
-        if self.vllm:
+        self.openai = cfg.provider == "openai"
+        self.unsupported = set()  # openai: request parameters the model rejected
+        if self.openai:
+            self.model_override = None
+            self.base_url = cfg.openai_base_url
+            key = os.environ.get(cfg.openai_key_env)
+        elif self.vllm:
             self.base_url = os.environ.get(cfg.vllm_url_env, "").rstrip("/")
             key = os.environ.get(cfg.vllm_key_env)  # our server's key, or a Modal proxy token "wk-<id>.ws-<secret>"
             # a Modal Auto Endpoint serves the model under its own name (see its /v1/models)
@@ -61,7 +70,7 @@ class OpenRouterClient:
             key = os.environ.get(cfg.api_key_env) or os.environ.get("OPENROUTER_API_KEY")
         key = "".join((key or "").split())  # pasted keys sometimes carry stray spaces/newlines
         if not key:
-            raise RuntimeError(f"No API key in ${cfg.vllm_key_env if self.vllm else cfg.api_key_env}")
+            raise RuntimeError(f"No API key in ${cfg.openai_key_env if self.openai else cfg.vllm_key_env if self.vllm else cfg.api_key_env}")
         self.cfg = cfg
         self.session = requests.Session()
         # requests keeps 10 connections per host by default; with no concurrency cap a run has one call in flight per agent
@@ -96,6 +105,8 @@ class OpenRouterClient:
 
     def complete(self, messages, *, model, temperature=1.0, max_tokens=4000,
                  reasoning=True, reasoning_effort=None, hints=None) -> LLMResponse:
+        if self.openai:
+            return self._complete_openai(messages, model, temperature, max_tokens, reasoning, reasoning_effort)
         if self.vllm and self.model_override:
             model = self.model_override
         body = {
@@ -113,14 +124,86 @@ class OpenRouterClient:
                 body["reasoning"] = {"effort": reasoning_effort} if reasoning_effort else {"enabled": True}
             if self.cfg.provider_routing:
                 body["provider"] = self.cfg.provider_routing
+
+        def parse(data, attempt):
+            if "error" in data:
+                raise RuntimeError(f"provider error: {data['error']}")
+            choice = data["choices"][0]
+            msg = choice["message"]
+            finish = choice.get("finish_reason")
+            content = msg.get("content") or ""
+            reasoning_text = (msg.get("reasoning") or msg.get("reasoning_content")
+                              or _join_reasoning(msg.get("reasoning_details")))
+            if finish == "length":
+                # reasoning ate the budget, so the answer is missing or truncated: retry with more room
+                body["max_tokens"] = min(2 * body["max_tokens"], MAX_TOKENS_CAP)
+                if not content.strip() or attempt < self.cfg.max_retries:
+                    raise RuntimeError(f"truncated output (finish_reason=length, {len(content)} chars)")
+            if not content.strip():
+                raise RuntimeError(f"empty content (finish_reason={finish})")
+            return LLMResponse(content=content, reasoning=reasoning_text, model=data.get("model"),
+                               usage=data.get("usage") or {}, raw_id=data.get("id"), finish_reason=finish,
+                               provider=data.get("provider") or ("modal-vllm" if self.vllm else None))
+
+        return self._post("/chat/completions", body, parse)
+
+    def _complete_openai(self, messages, model, temperature, max_tokens, reasoning, reasoning_effort):
+        """OpenAI's Responses API: the only OpenAI endpoint that returns (a summary of) the reasoning."""
+        model = model.removeprefix("openai/")
+        body = {
+            "model": model,
+            "input": messages,
+            "max_output_tokens": max_tokens,
+            "store": False,
+            # same key for every call that starts with the same system prompt (one agent), so its calls hit one cache
+            "prompt_cache_key": hashlib.sha1(json.dumps(messages[:1]).encode()).hexdigest()[:16],
+            "reasoning": {"effort": (reasoning_effort or "medium") if reasoning else "none"},
+        }
+        if reasoning:
+            body["reasoning"]["summary"] = "detailed"
+        if temperature is not None:
+            body["temperature"] = temperature
+        for param in self.unsupported:
+            _drop(body, param)
+
+        def parse(data, attempt):
+            if data.get("error"):
+                raise RuntimeError(f"provider error: {data['error']}")
+            content = "".join(c.get("text", "") for o in data.get("output", []) if o.get("type") == "message"
+                              for c in o.get("content", []) if c.get("type") == "output_text")
+            summary = "\n\n".join(s.get("text", "") for o in data.get("output", []) if o.get("type") == "reasoning"
+                                   for s in o.get("summary", []) if s.get("text"))
+            finish = "stop" if data.get("status") == "completed" else (data.get("incomplete_details") or {}).get("reason")
+            if finish == "max_output_tokens":
+                finish = "length"
+                body["max_output_tokens"] = min(2 * body["max_output_tokens"], MAX_TOKENS_CAP)
+                if not content.strip() or attempt < self.cfg.max_retries:
+                    raise RuntimeError(f"truncated output (max_output_tokens, {len(content)} chars)")
+            if not content.strip():
+                raise RuntimeError(f"empty content (status={data.get('status')})")
+            u = data.get("usage") or {}
+            cached = (u.get("input_tokens_details") or {}).get("cached_tokens", 0) or 0
+            usage = {"prompt_tokens": u.get("input_tokens", 0), "completion_tokens": u.get("output_tokens", 0),
+                     "prompt_tokens_details": {"cached_tokens": cached},
+                     "completion_tokens_details": {"reasoning_tokens": (u.get("output_tokens_details") or {}).get("reasoning_tokens", 0)}}
+            price = OPENAI_PRICES.get(model)
+            if price:
+                usage["cost"] = ((usage["prompt_tokens"] - cached) * price[0] + cached * price[1]
+                                 + usage["completion_tokens"] * price[2]) / 1e6
+            return LLMResponse(content=content, reasoning=summary or None, model=data.get("model"), usage=usage,
+                               raw_id=data.get("id"), finish_reason=finish, provider="openai")
+
+        return self._post("/responses", body, parse)
+
+    def _post(self, path, body, parse) -> LLMResponse:
+        """POST with retries; `parse(data, attempt)` turns a 200 into an LLMResponse or raises to retry."""
         last_err = None
         limited = 0.0  # seconds spent waiting out 429s
         attempt = 0
         while attempt <= self.cfg.max_retries:
             t0 = time.time()
             try:
-                r = self.session.post(f"{self.base_url}/chat/completions", json=body,
-                                      timeout=self.timeout)
+                r = self.session.post(f"{self.base_url}{path}", json=body, timeout=self.timeout)
                 if r.status_code == 429 and limited < self.cfg.rate_limit_wait:
                     # rate limited: wait as asked (or back off) and try again without using up a retry
                     try:
@@ -134,33 +217,40 @@ class OpenRouterClient:
                     continue
                 if r.status_code in (408, 429) or r.status_code >= 500:
                     raise RuntimeError(f"HTTP {r.status_code}: {r.text[:300]}")
+                if r.status_code == 400 and self.openai:
+                    # a model may reject a parameter (e.g. temperature on a reasoning model): drop it for good, retry
+                    param = _error_param(r)
+                    if param and param not in self.unsupported and _drop(body, param):
+                        self.unsupported.add(param)
+                        continue
                 if r.status_code != 200:  # client errors are not retried
                     return LLMResponse(content="", error=f"HTTP {r.status_code}: {r.text[:500]}",
                                        latency_s=time.time() - t0)
-                data = r.json()
-                if "error" in data:
-                    raise RuntimeError(f"provider error: {data['error']}")
-                choice = data["choices"][0]
-                msg = choice["message"]
-                finish = choice.get("finish_reason")
-                content = msg.get("content") or ""
-                reasoning_text = (msg.get("reasoning") or msg.get("reasoning_content")
-                                  or _join_reasoning(msg.get("reasoning_details")))
-                if finish == "length":
-                    # reasoning ate the budget, so the answer is missing or truncated: retry with more room
-                    body["max_tokens"] = min(2 * body["max_tokens"], MAX_TOKENS_CAP)
-                    if not content.strip() or attempt < self.cfg.max_retries:
-                        raise RuntimeError(f"truncated output (finish_reason=length, {len(content)} chars)")
-                if not content.strip():
-                    raise RuntimeError(f"empty content (finish_reason={finish})")
-                return LLMResponse(content=content, reasoning=reasoning_text, model=data.get("model"),
-                                   usage=data.get("usage") or {}, latency_s=time.time() - t0,
-                                   raw_id=data.get("id"), finish_reason=finish, provider=data.get("provider") or ("modal-vllm" if self.vllm else None))
+                resp = parse(r.json(), attempt)
+                resp.latency_s = time.time() - t0
+                return resp
             except (requests.RequestException, RuntimeError, ValueError, KeyError) as e:
                 last_err = f"{type(e).__name__}: {e}"
                 time.sleep(min(60, 2 ** attempt + random.random()))
             attempt += 1
         return LLMResponse(content="", error=f"failed after retries: {last_err}")
+
+
+def _error_param(r) -> str | None:
+    try:
+        return (r.json().get("error") or {}).get("param")
+    except ValueError:
+        return None
+
+
+def _drop(body: dict, param: str) -> bool:
+    """Remove a dotted parameter such as "reasoning.summary" from a request body; True if it was there."""
+    *path, last = param.split(".")
+    for p in path:
+        body = body.get(p)
+        if not isinstance(body, dict):
+            return False
+    return body.pop(last, None) is not None
 
 
 def _join_reasoning(details) -> str | None:
@@ -214,7 +304,7 @@ class MockClient:
 def make_client(llm_cfg, seed: int = 0):
     if llm_cfg.provider == "mock":
         return MockClient(seed)
-    if llm_cfg.provider in ("openrouter", "vllm"):
+    if llm_cfg.provider in ("openrouter", "vllm", "openai"):
         return OpenRouterClient(llm_cfg)
     raise ValueError(f"unknown llm.provider {llm_cfg.provider!r}")
 

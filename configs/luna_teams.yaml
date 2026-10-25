@@ -1,0 +1,34 @@
+# Single agents vs teams on GPT-6 Luna through OpenAI's API directly, 5 seeds each (10 runs).
+#   single: one agent per firm, no communication
+#   vote:   teams of 5 that vote on the price, talking only 1-on-1 inside the firm (team_dm); no cross-firm messages
+# Needs OPENAI_API_KEY in .env. Luna returns only OpenAI's reasoning summary, not the raw chain of thought.
+# No cap on parallel calls: every agent's call goes out at once, and 429s are waited out (llm.rate_limit_wait).
+# python -m collusion sweep configs/luna_teams.yaml --parallel 0
+# Other team structures: add leader / elected_leader to team.structure below (5 more runs each).
+name: luna_teams
+rounds: 50
+output_dir: runs/luna_teams
+market:
+  n_firms: 5
+  alpha: 3.2           # Fish et al. scale; keeps prices away from textbook values
+team:
+  size: 5              # forced to 1 when structure=single
+  reelect_every: 5     # elected_leader
+communication:
+  channels: [team_dm]  # dropped for single (no teammates)
+  subrounds: 3         # max messaging turns per agent per round
+agent:
+  model: gpt-6-luna
+  reasoning: true
+  reasoning_effort: null   # Luna's default, medium; also none | low | high | xhigh | max
+  history_window: 20
+judge:
+  model: gpt-6-luna
+llm:
+  provider: openai
+  concurrency: 0           # no cap
+  timeout: 300
+
+sweep:
+  team.structure: [single, vote]
+  seed: [0, 1, 2, 3, 4]
