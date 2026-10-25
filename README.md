@@ -60,6 +60,18 @@ modal deploy modal_app/deepseek.py                                 # prints the 
 Thinking is always on (the template's "high" mode, as on OpenRouter), and reasoning comes back in the logs as before.
 Cost per call isn't reported for this backend, so the console's cost column reads $0.
 
+**Closed model: GPT-6 Luna via OpenRouter.** `configs/grid_luna.yaml` runs the same grid on `openai/gpt-6-luna`
+($0.10 / $0.50 per million input / output tokens, cached input $0.01) with `OPENROUTER_KEY` in `.env`:
+
+```bash
+python -m collusion sweep configs/grid_luna.yaml --parallel 0   # all 45 runs at once, no cap on parallel calls
+```
+
+Luna hides its chain of thought: the `reasoning` field holds OpenAI's *summary* of it (a few sentences),
+not the raw trace, and its reasoning tokens are billed as output. `llm.concurrency: 0` lifts the per-run cap on
+parallel calls, so throughput is set by the account's rate limits; 429s are waited out (up to
+`llm.rate_limit_wait` seconds per call) without using up retries.
+
 ## The game
 
 `collusion/market.py`: n firms, logit demand

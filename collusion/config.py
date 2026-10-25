@@ -82,9 +82,12 @@ class LLMConfig:
     vllm_model_env: str = "MODAL_LLM_MODEL"  # optional served-model name, e.g. for a Modal Auto Endpoint
     api_key_env: str = "OPENROUTER_KEY"  # openrouter only; falls back to OPENROUTER_API_KEY
     base_url: str = "https://openrouter.ai/api/v1"  # openrouter only
-    concurrency: int = 16
+    concurrency: int = 16  # parallel calls per run (and judge); 0 = no cap (every agent's call goes out at once)
     timeout: float = 90.0  # most calls take < 30 s; a stuck call holds up its whole phase until retried
     max_retries: int = 5
+    # 429s (provider rate limits) are retried with backoff and don't use up max_retries; a call gives up only after
+    # being rate limited for this many seconds in total
+    rate_limit_wait: float = 3600.0
     # OpenRouter provider preferences (openrouter only), sent as-is. Pinned by default: OpenRouter's own routing mixes hosts of very
     # different speed (and possibly quantization); on 2026-10-24 Baidu gave p50 8.5 s / max 18 s per call against
     # 12-38 s / 46-349 s unpinned. Without fallbacks, calls fail if both hosts are down. null = OpenRouter default.

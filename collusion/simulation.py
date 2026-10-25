@@ -67,7 +67,7 @@ class Simulation:
         stamp = time.strftime("%Y%m%d-%H%M%S")
         self.run_dir = Path(run_dir or Path(cfg.output_dir) / f"{stamp}_{cfg.name}")
         self.log = RunLogger(self.run_dir, echo=echo)
-        self.pool = ThreadPoolExecutor(max_workers=cfg.llm.concurrency)
+        self.pool = ThreadPoolExecutor(max_workers=cfg.llm.concurrency or len(self.agents))
         # separate pool for per-team decisions, which themselves fan out ballots on self.pool
         self.team_pool = ThreadPoolExecutor(max_workers=cfg.market.n_firms)
 

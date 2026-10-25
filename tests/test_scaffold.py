@@ -175,3 +175,41 @@ def test_notes_memory_still_stateless(tmp_path):
     calls = [e for e in read_events(tmp_path / "run") if e["type"] == "llm_call"]
     assert all(len(c["messages"]) == 2 for c in calls if c["attempt"] == 0)
     assert "PLANS.txt" in calls[-1]["messages"][1]["content"]
+
+
+def test_rate_limits_are_waited_out_without_using_retries(monkeypatch):
+    from collusion import llm
+    from collusion.config import LLMConfig
+
+    class R:
+        def __init__(self, code, body):
+            self.status_code, self._body, self.headers, self.text = code, body, {"retry-after": "0"}, ""
+
+        def json(self):
+            return self._body
+
+    ok = {"choices": [{"message": {"content": '{"price": 2}'}, "finish_reason": "stop"}], "usage": {}}
+    replies = [R(429, {})] * 8 + [R(200, ok)]
+    monkeypatch.setenv("OPENROUTER_KEY", "k")
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+    c = llm.OpenRouterClient(LLMConfig(provider="openrouter", max_retries=1, concurrency=0))
+    monkeypatch.setattr(c.session, "post", lambda *a, **k: replies.pop(0))
+    resp = c.complete([{"role": "user", "content": "x"}], model="m")
+    assert resp.error is None and resp.content == '{"price": 2}'
+
+
+def test_luna_grid_is_uncapped():
+    from collusion.__main__ import expand_sweep
+    runs = expand_sweep("configs/grid_luna.yaml")
+    assert len(runs) == 45
+    data = runs[0][1]
+    assert data["llm"]["concurrency"] == 0 and data["llm"]["provider"] == "openrouter"
+    assert data["llm"]["provider_routing"] is None and data["agent"]["model"] == "openai/gpt-6-luna"
+
+
+def test_uncapped_concurrency_runs(tmp_path):
+    cfg = load_config(None, ["team.structure=vote", "team.size=3", "rounds=2", "llm.provider=mock", "llm.concurrency=0"])
+    sim = Simulation(cfg, run_dir=tmp_path / "run")
+    assert sim.pool._max_workers == len(sim.agents)
+    assert sim.run()["pricing"]["rounds"] == 2
+    judge_run(tmp_path / "run", provider="mock")

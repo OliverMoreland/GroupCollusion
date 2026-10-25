@@ -1,0 +1,44 @@
+# The project grid on OpenAI's GPT-6 Luna via OpenRouter (same cells as configs/grid.yaml), with no cap on parallel calls.
+# Needs OPENROUTER_KEY in .env. Luna returns only a reasoning *summary* (the raw chain of thought stays hidden), and it
+# is logged where DeepSeek's full reasoning was. Rate limits (429s) are waited out per llm.rate_limit_wait.
+# python -m collusion sweep configs/grid_luna.yaml --parallel 0
+#
+# The project grid: firm decision structure x cross-firm communication, 15 cells x 3 seeds.
+#   structures: vote (egalitarian), leader (dictator), elected_leader (re-elected every 5 rounds), single
+#   comms:      none, subagent (cross-firm 1-on-1 except decision-makers), cross (any cross-firm 1-on-1), open
+# Every condition keeps a private open channel inside each firm (team_open). single x subagent is
+# undefined (no subagents) and is dropped as a duplicate of single x none.
+name: grid_luna
+rounds: 50
+output_dir: runs/grid_luna
+agent:
+  model: openai/gpt-6-luna
+  reasoning: true
+  reasoning_effort: null   # Luna's default, medium; also none | low | high | xhigh | max
+  history_window: 20
+judge:
+  model: openai/gpt-6-luna
+llm:
+  provider: openrouter
+  provider_routing: null   # the default pins DeepSeek hosts; let OpenRouter route Luna (OpenAI or Azure)
+  concurrency: 0           # no cap: every agent's call goes out at once
+  timeout: 300
+market:
+  n_firms: 5
+  alpha: 3.2           # Fish et al. scale; keeps prices away from textbook values
+team:
+  size: 5              # forced to 1 when structure=single
+  reelect_every: 5     # elected_leader
+communication:
+  subrounds: 3         # max messaging turns per agent per round
+
+presets:
+  none: [team_open]
+  subagent: [team_open, sub_dm]
+  cross: [team_open, cross_dm]
+  open: [team_open, global_open]
+
+sweep:
+  team.structure: [vote, leader, elected_leader, single]
+  communication.channels: [none, subagent, cross, open]
+  seed: [0, 1, 2]

@@ -64,6 +64,9 @@ class OpenRouterClient:
             raise RuntimeError(f"No API key in ${cfg.vllm_key_env if self.vllm else cfg.api_key_env}")
         self.cfg = cfg
         self.session = requests.Session()
+        # requests keeps 10 connections per host by default; with no concurrency cap a run has one call in flight per agent
+        n = cfg.concurrency or 256
+        self.session.mount("https://", requests.adapters.HTTPAdapter(pool_connections=4, pool_maxsize=n))
         self.session.headers.update({
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
@@ -111,11 +114,24 @@ class OpenRouterClient:
             if self.cfg.provider_routing:
                 body["provider"] = self.cfg.provider_routing
         last_err = None
-        for attempt in range(self.cfg.max_retries + 1):
+        limited = 0.0  # seconds spent waiting out 429s
+        attempt = 0
+        while attempt <= self.cfg.max_retries:
             t0 = time.time()
             try:
                 r = self.session.post(f"{self.base_url}/chat/completions", json=body,
                                       timeout=self.timeout)
+                if r.status_code == 429 and limited < self.cfg.rate_limit_wait:
+                    # rate limited: wait as asked (or back off) and try again without using up a retry
+                    try:
+                        wait = float(r.headers.get("retry-after") or 0)
+                    except ValueError:
+                        wait = 0
+                    wait = min(60.0, wait or 2 + limited / 4) + random.random() * 2
+                    limited += wait
+                    last_err = f"HTTP 429: {r.text[:200]}"
+                    time.sleep(wait)
+                    continue
                 if r.status_code in (408, 429) or r.status_code >= 500:
                     raise RuntimeError(f"HTTP {r.status_code}: {r.text[:300]}")
                 if r.status_code != 200:  # client errors are not retried
@@ -143,6 +159,7 @@ class OpenRouterClient:
             except (requests.RequestException, RuntimeError, ValueError, KeyError) as e:
                 last_err = f"{type(e).__name__}: {e}"
                 time.sleep(min(60, 2 ** attempt + random.random()))
+            attempt += 1
         return LLMResponse(content="", error=f"failed after retries: {last_err}")
 
 

@@ -327,7 +327,8 @@ def editor_page(launch):
                                             "at: the Auto Endpoint by default), about 2–3× faster than OpenRouter, billed "
                                             "per GPU-hour. OpenRouter: shared hosts, billed per token.")
             col = st.columns(3)
-            llm["concurrency"] = col[0].number_input("Parallel API calls", 1, 128, base["llm"]["concurrency"], key=key("conc"))
+            llm["concurrency"] = col[0].number_input("Parallel API calls", 0, 1024, base["llm"]["concurrency"], key=key("conc"),
+                                                  help="Per run. 0 = no cap: every agent's call goes out at once.")
             llm["timeout"] = col[1].number_input("Timeout (s)", 10.0, 1200.0, float(base["llm"]["timeout"]), key=key("timeout"),
                                                  help="A stuck call holds up its whole phase until it times out and is retried. "
                                                       "Most calls finish in under a minute.")

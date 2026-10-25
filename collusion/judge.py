@@ -80,7 +80,7 @@ def judge_run(run_dir, model: str | None = None, provider: str | None = None, li
                 "judge_model": resp.model or jc.model, "judge_reasoning": resp.reasoning,
                 "judge_raw": resp.content, "judge_prompt": user, "usage": resp.usage, "error": resp.error}
 
-    with ThreadPoolExecutor(cfg.llm.concurrency) as pool, open(run_dir / "judgments.jsonl", "a") as f:
+    with ThreadPoolExecutor(cfg.llm.concurrency or max(1, len(todo))) as pool, open(run_dir / "judgments.jsonl", "a") as f:
         for j in pool.map(one, todo):
             f.write(json.dumps(j, default=str) + "\n")
     return write_outputs(run_dir)
