@@ -16,7 +16,7 @@ from collusion.market import Market  # noqa: E402
 # rough per-call cost and per-phase latency, from DeepSeek v4 flash smoke runs (36 calls, $0.005-0.007;
 # phases take ~10-20 s with hosts pinned to Baidu/GMICloud); prompts grow with history, so long runs cost more per call
 COST_PER_CALL = 0.0002
-SECONDS_PER_PHASE = {"vllm": 10, "openrouter": 15}  # measured on 3-round smoke runs, 2026-10-24
+SECONDS_PER_PHASE = {"vllm": 10, "openrouter": 15, "openai": 6}  # measured on smoke runs, 2026-10-24 (openai: Luna via OpenRouter, 10-25)
 GPU_PER_HOUR = 25.0  # rough: one Modal endpoint replica on 4×B200 at $6.25/h (Oct 2026)
 
 STRUCTURE_INFO = {
@@ -319,15 +319,17 @@ def editor_page(launch):
         with tabs[6]:
             st.caption("Plumbing. The defaults are fine for almost every run.")
             llm = c["llm"]
-            backends = {"vllm": "Modal (our DeepSeek endpoint)", "openrouter": "OpenRouter"}
+            backends = {"vllm": "Modal (our DeepSeek endpoint)", "openrouter": "OpenRouter", "openai": "OpenAI (direct)"}
             llm["provider"] = st.radio("Where the model runs", list(backends), format_func=backends.get, horizontal=True,
                                        index=list(backends).index(base["llm"]["provider"]) if base["llm"]["provider"] in backends else 0,
                                        key=key("backend"),
                                        help="Modal: DeepSeek V4 Flash on our own Modal endpoint (whatever MODAL_LLM_URL in .env points "
                                             "at: the Auto Endpoint by default), about 2–3× faster than OpenRouter, billed "
-                                            "per GPU-hour. OpenRouter: shared hosts, billed per token.")
+                                            "per GPU-hour. OpenRouter: shared hosts, billed per token. OpenAI: OpenAI's own API "
+                                            "(OPENAI_API_KEY), for OpenAI models such as gpt-6-luna.")
             col = st.columns(3)
-            llm["concurrency"] = col[0].number_input("Parallel API calls", 1, 128, base["llm"]["concurrency"], key=key("conc"))
+            llm["concurrency"] = col[0].number_input("Parallel API calls", 0, 1024, base["llm"]["concurrency"], key=key("conc"),
+                                                  help="Per run. 0 = no cap: every agent's call goes out at once.")
             llm["timeout"] = col[1].number_input("Timeout (s)", 10.0, 1200.0, float(base["llm"]["timeout"]), key=key("timeout"),
                                                  help="A stuck call holds up its whole phase until it times out and is retried. "
                                                       "Most calls finish in under a minute.")

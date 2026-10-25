@@ -175,3 +175,87 @@ def test_notes_memory_still_stateless(tmp_path):
     calls = [e for e in read_events(tmp_path / "run") if e["type"] == "llm_call"]
     assert all(len(c["messages"]) == 2 for c in calls if c["attempt"] == 0)
     assert "PLANS.txt" in calls[-1]["messages"][1]["content"]
+
+
+def test_rate_limits_are_waited_out_without_using_retries(monkeypatch):
+    from collusion import llm
+    from collusion.config import LLMConfig
+
+    class R:
+        def __init__(self, code, body):
+            self.status_code, self._body, self.headers, self.text = code, body, {"retry-after": "0"}, ""
+
+        def json(self):
+            return self._body
+
+    ok = {"choices": [{"message": {"content": '{"price": 2}'}, "finish_reason": "stop"}], "usage": {}}
+    replies = [R(429, {})] * 8 + [R(200, ok)]
+    monkeypatch.setenv("OPENROUTER_KEY", "k")
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+    c = llm.OpenRouterClient(LLMConfig(provider="openrouter", max_retries=1, concurrency=0))
+    monkeypatch.setattr(c.session, "post", lambda *a, **k: replies.pop(0))
+    resp = c.complete([{"role": "user", "content": "x"}], model="m")
+    assert resp.error is None and resp.content == '{"price": 2}'
+
+
+def test_luna_grid_is_uncapped():
+    from collusion.__main__ import expand_sweep
+    runs = expand_sweep("configs/grid_luna.yaml")
+    assert len(runs) == 45
+    data = runs[0][1]
+    assert data["llm"]["concurrency"] == 0 and data["llm"]["provider"] == "openrouter"
+    assert data["llm"]["provider_routing"] is None and data["agent"]["model"] == "openai/gpt-6-luna"
+
+
+def test_uncapped_concurrency_runs(tmp_path):
+    cfg = load_config(None, ["team.structure=vote", "team.size=3", "rounds=2", "llm.provider=mock", "llm.concurrency=0"])
+    sim = Simulation(cfg, run_dir=tmp_path / "run")
+    assert sim.pool._max_workers == len(sim.agents)
+    assert sim.run()["pricing"]["rounds"] == 2
+    judge_run(tmp_path / "run", provider="mock")
+
+
+def test_openai_responses_client(monkeypatch):
+    from collusion import llm
+    from collusion.config import LLMConfig
+
+    class R:
+        def __init__(self, code, body):
+            self.status_code, self._body, self.headers, self.text = code, body, {}, json.dumps(body)
+
+        def json(self):
+            return self._body
+
+    ok = {"id": "resp_1", "model": "gpt-6-luna", "status": "completed", "output": [
+        {"type": "reasoning", "summary": [{"type": "summary_text", "text": "Undercut slightly."}]},
+        {"type": "message", "content": [{"type": "output_text", "text": '{"price": 1.79}'}]}],
+        "usage": {"input_tokens": 1000, "input_tokens_details": {"cached_tokens": 800}, "output_tokens": 100,
+                  "output_tokens_details": {"reasoning_tokens": 60}}}
+    replies = [R(400, {"error": {"message": "Unsupported parameter: 'temperature'", "param": "temperature"}}), R(200, ok)]
+    sent = []
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+    c = llm.OpenRouterClient(LLMConfig(provider="openai"))
+
+    def post(url, json=None, timeout=None):
+        sent.append((url, dict(json)))
+        return replies.pop(0)
+
+    monkeypatch.setattr(c.session, "post", post)
+    resp = c.complete([{"role": "system", "content": "s"}, {"role": "user", "content": "u"}], model="gpt-6-luna",
+                      temperature=0.0)
+    assert sent[0][0].endswith("/responses") and sent[0][1]["reasoning"] == {"effort": "medium", "summary": "detailed"}
+    assert "temperature" in sent[0][1] and "temperature" not in sent[1][1] and "temperature" in c.unsupported
+    assert resp.content == '{"price": 1.79}' and resp.reasoning == "Undercut slightly." and resp.error is None
+    u = resp.usage
+    assert u["prompt_tokens"] == 1000 and u["prompt_tokens_details"]["cached_tokens"] == 800
+    assert u["completion_tokens_details"]["reasoning_tokens"] == 60
+    assert abs(u["cost"] - (200 * 0.10 + 800 * 0.01 + 100 * 0.50) / 1e6) < 1e-12
+
+
+def test_luna_teams_config():
+    runs = dict(expand_sweep("configs/luna_teams.yaml"))
+    assert len(runs) == 10
+    single, vote = runs["luna_teams__structure=single__seed=0"], runs["luna_teams__structure=vote__seed=4"]
+    assert single["communication"]["channels"] == [] and single["team"]["size"] == 1
+    assert vote["communication"]["channels"] == ["team_dm"] and vote["team"]["size"] == 5
+    assert vote["llm"]["provider"] == "openai" and vote["llm"]["concurrency"] == 0

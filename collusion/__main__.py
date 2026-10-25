@@ -108,7 +108,7 @@ def cmd_sweep(a):
             print(f"FAILED {name}: {type(e).__name__}: {e}", flush=True)
 
     # each run already fans out its own LLM calls; --parallel runs several games at once
-    with ThreadPoolExecutor(a.parallel) as pool:
+    with ThreadPoolExecutor(a.parallel or len(runs)) as pool:
         list(pool.map(one, runs))
     cmd_report(argparse.Namespace(runs_dir=runs[0][1].get("output_dir", "runs")))
 
@@ -196,7 +196,7 @@ def main(argv=None):
     s.add_argument("--echo", action="store_true")
     s.add_argument("--judge", action="store_true")
     s.add_argument("--dry-run", action="store_true")
-    s.add_argument("--parallel", type=int, default=1, help="number of runs to play at the same time")
+    s.add_argument("--parallel", type=int, default=1, help="number of runs to play at the same time (0 = all)")
     s.set_defaults(fn=cmd_sweep)
 
     j = sub.add_parser("judge")
